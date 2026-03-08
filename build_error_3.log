@@ -1,0 +1,48 @@
+> Task :core:model:checkKotlinGradlePluginConfigurationErrors
+> Task :core:model:compileKotlin UP-TO-DATE
+> Task :core:model:compileJava NO-SOURCE
+> Task :core:model:processResources NO-SOURCE
+> Task :core:model:classes UP-TO-DATE
+> Task :core:model:jar UP-TO-DATE
+> Task :core:camera:checkKotlinGradlePluginConfigurationErrors
+> Task :core:camera:preBuild UP-TO-DATE
+> Task :core:camera:preDebugBuild UP-TO-DATE
+> Task :core:camera:generateDebugResValues UP-TO-DATE
+> Task :core:camera:generateDebugResources UP-TO-DATE
+> Task :core:camera:packageDebugResources UP-TO-DATE
+> Task :core:camera:parseDebugLocalResources UP-TO-DATE
+> Task :core:camera:generateDebugRFile UP-TO-DATE
+> Task :core:common:preBuild UP-TO-DATE
+> Task :core:common:preDebugBuild UP-TO-DATE
+> Task :core:common:generateDebugResValues UP-TO-DATE
+> Task :core:common:generateDebugResources UP-TO-DATE
+> Task :core:common:packageDebugResources UP-TO-DATE
+> Task :core:common:parseDebugLocalResources UP-TO-DATE
+> Task :core:common:generateDebugRFile UP-TO-DATE
+> Task :core:common:checkKotlinGradlePluginConfigurationErrors
+> Task :core:common:kspDebugKotlin UP-TO-DATE
+> Task :core:common:compileDebugKotlin UP-TO-DATE
+> Task :core:common:javaPreCompileDebug UP-TO-DATE
+> Task :core:common:compileDebugJavaWithJavac UP-TO-DATE
+> Task :core:common:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:common:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:camera:kspDebugKotlin UP-TO-DATE
+
+> Task :core:camera:compileDebugKotlin FAILED
+e: file:///C:/Projects/Hobby/Operator/core/camera/src/main/java/com/example/camerax/core/camera/session/CameraSessionControllerImpl.kt:22:27 Unresolved reference: guava
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':core:camera:compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 3s
+23 actionable tasks: 4 executed, 19 up-to-date

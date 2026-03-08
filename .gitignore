@@ -1,0 +1,35 @@
+# Android/IntelliJ/Gradle/Git Ignore
+
+# Built artifacts
+**/build/
+*.apk
+*.aar
+*.ap_
+*.dex
+*.class
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Gradle
+.gradle/
+build/
+
+# Kotlin
+*.kotlin_module
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# NDk
+obj/
+libs/

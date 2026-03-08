@@ -6,7 +6,8 @@ sealed interface NativeProcessResult {
     data class Success(
         val w: Int,
         val h: Int,
-        val processedData: ByteArray
+        val processedData: ByteArray,
+        val rotationDegrees: Int = 0
     ) : NativeProcessResult
     
     // Fallback path in case native fusion fails or is bypassed for MVP

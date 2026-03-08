@@ -18,7 +18,8 @@ class ImageProxyFrameMapper @Inject constructor() {
             timestampNs = image.imageInfo.timestamp,
             exposureTimeNs = 0L, // MVP fallback
             iso = 100,           // MVP fallback
-            lensPosition = 0f    // MVP fallback
+            lensPosition = 0f,   // MVP fallback
+            rotationDegrees = image.imageInfo.rotationDegrees
         )
         
         return BurstFrameSet.Frame(
@@ -38,6 +39,10 @@ class ImageProxyFrameMapper @Inject constructor() {
         val uBuffer = uPlane.buffer
         val vBuffer = vPlane.buffer
 
+        yBuffer.rewind()
+        uBuffer.rewind()
+        vBuffer.rewind()
+
         val numPixels = image.width * image.height
         val nv21 = ByteArray(numPixels + (numPixels / 2))
 
@@ -47,46 +52,49 @@ class ImageProxyFrameMapper @Inject constructor() {
         // Copy Y channel
         var pos = 0
         if (yPixelStride == 1 && yRowStride == image.width) {
-            yBuffer.position(0)
             yBuffer.get(nv21, 0, numPixels)
             pos = numPixels
         } else {
-            val yBytes = ByteArray(yBuffer.remaining())
-            yBuffer.position(0)
-            yBuffer.get(yBytes)
-            var srcPos = 0
+            val yRowData = ByteArray(yRowStride)
             for (row in 0 until image.height) {
-                System.arraycopy(yBytes, srcPos, nv21, pos, image.width)
-                srcPos += yRowStride
-                pos += image.width
+                val bytesToRead = minOf(yRowStride, yBuffer.remaining())
+                yBuffer.get(yRowData, 0, bytesToRead)
+                var srcPos = 0
+                for (col in 0 until image.width) {
+                    nv21[pos++] = yRowData[srcPos]
+                    srcPos += yPixelStride
+                }
             }
         }
 
-        // Copy VU channel (NV21 format is YYYY... VU VU VU...)
+        // Copy VU channel
         val vRowStride = vPlane.rowStride
         val vPixelStride = vPlane.pixelStride
         val uRowStride = uPlane.rowStride
         val uPixelStride = uPlane.pixelStride
-        
-        val vBytes = ByteArray(vBuffer.remaining())
-        vBuffer.position(0)
-        vBuffer.get(vBytes)
-        
-        val uBytes = ByteArray(uBuffer.remaining())
-        uBuffer.position(0)
-        uBuffer.get(uBytes)
 
         val chromaWidth = image.width / 2
         val chromaHeight = image.height / 2
-        
-        // MVP Slow path for foolproof extraction of VU bytes into NV21 format
+
+        val vRowData = ByteArray(vRowStride)
+        val uRowData = ByteArray(uRowStride)
+
         for (row in 0 until chromaHeight) {
+            val vBytesToRead = minOf(vRowStride, vBuffer.remaining())
+            vBuffer.get(vRowData, 0, vBytesToRead)
+
+            val uBytesToRead = minOf(uRowStride, uBuffer.remaining())
+            uBuffer.get(uRowData, 0, uBytesToRead)
+
+            var vSrcPos = 0
+            var uSrcPos = 0
+
             for (col in 0 until chromaWidth) {
-                val vIndex = row * vRowStride + col * vPixelStride
-                val uIndex = row * uRowStride + col * uPixelStride
+                nv21[pos++] = vRowData[vSrcPos]
+                nv21[pos++] = uRowData[uSrcPos]
                 
-                nv21[pos++] = vBytes[vIndex] // V
-                nv21[pos++] = uBytes[uIndex] // U
+                vSrcPos += vPixelStride
+                uSrcPos += uPixelStride
             }
         }
 

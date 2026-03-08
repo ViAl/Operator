@@ -17,7 +17,7 @@ class InMemoryZslFrameBuffer @Inject constructor(
     private val logger: Logger
 ) : ZslFrameBuffer {
 
-    private val capacity = 10
+    private val capacity = 8
     
     // Buffer stores Frame instances (snapshots), NOT ImageProxy, 
     // to avoid leaking CameraX buffers and blocking the pipeline.

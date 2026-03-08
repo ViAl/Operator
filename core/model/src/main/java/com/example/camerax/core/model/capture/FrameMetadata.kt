@@ -4,5 +4,6 @@ data class FrameMetadata(
     val timestampNs: Long,
     val exposureTimeNs: Long,
     val iso: Int,
-    val lensPosition: Float
+    val lensPosition: Float,
+    val rotationDegrees: Int = 0
 )

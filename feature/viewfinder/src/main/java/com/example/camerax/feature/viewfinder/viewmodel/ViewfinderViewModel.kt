@@ -1,6 +1,5 @@
 package com.example.camerax.feature.viewfinder.viewmodel
 
-import android.os.SystemClock
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModel
@@ -23,7 +22,7 @@ import javax.inject.Inject
 class ViewfinderViewModel @Inject constructor(
     private val sessionController: CameraSessionController,
     private val orchestrator: PhotoPipelineOrchestrator,
-    private val frameBuffer: ZslFrameBuffer, // Only for pushFrame from analyzer
+    private val frameBuffer: ZslFrameBuffer,
     private val logger: Logger
 ) : ViewModel() {
 
@@ -36,7 +35,6 @@ class ViewfinderViewModel @Inject constructor(
     fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
         logger.d("ViewfinderViewModel", "Binding camera to lifecycle")
         sessionController.bindToLifecycle(lifecycleOwner, previewView) { proxy ->
-            // High frequency analyzer callback -> push to ZSL Buffer
             frameBuffer.pushFrame(proxy)
         }
     }
@@ -48,24 +46,27 @@ class ViewfinderViewModel @Inject constructor(
     }
 
     fun onShutterClicked() {
-        if (captureState.value == CapturePipelineState.AcquiringFrames || 
-            captureState.value == CapturePipelineState.Processing || 
-            captureState.value == CapturePipelineState.Saving) {
+        val current = captureState.value
+        if (current == CapturePipelineState.AcquiringFrames ||
+            current == CapturePipelineState.Processing ||
+            current == CapturePipelineState.Saving) {
             logger.d("ViewfinderViewModel", "Ignoring shutter: already capturing")
             return
         }
 
-        // CameraX images typically use SystemClock.elapsedRealtimeNanos() instead of System.nanoTime()
-        val targetTimestamp = SystemClock.elapsedRealtimeNanos() 
-        
         viewModelScope.launch {
             try {
-                val result = orchestrator.capturePhoto(targetTimestamp)
+                // Step 1: Trigger full-res ImageCapture (camera layer)
+                val jpegBytes = sessionController.capturePhoto()
+                logger.d("ViewfinderViewModel", "ImageCapture acquired: ${jpegBytes.size} bytes")
+
+                // Step 2: Hand JPEG bytes to pipeline for saving
+                val result = orchestrator.capturePhoto(jpegBytes)
                 if (result is SaveResult.Success) {
                     _lastSavedUri.value = result.uriString
                 }
             } catch (e: Exception) {
-                logger.e("ViewfinderViewModel", "Capture failed from UI layer", e)
+                logger.e("ViewfinderViewModel", "Capture failed", e)
             }
         }
     }

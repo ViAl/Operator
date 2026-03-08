@@ -23,29 +23,36 @@ class JniProcessingGateway @Inject constructor(
 
     override suspend fun process(request: NativeProcessRequest): NativeProcessResult = withContext(dispatchers.default) {
         try {
-            if (request.burstSet.frames.isEmpty()) {
+            val framesList = request.burstSet.frames
+            if (framesList.isEmpty()) {
                 return@withContext NativeProcessResult.Error("Burst is empty")
             }
 
-            // MVP: Pass-through the base frame to verify JNI wiring
-            val baseFrame = request.burstSet.frames.first()
-            val nv21Bytes = baseFrame.nv21Data
+            // Burst alignment base frame
+            val baseIndex = framesList.size / 2
+            val baseFrame = framesList[baseIndex]
             
-            // In a real fusion, we'd pass an array of byte arrays or AHardwareBuffer refs.
-            // For MVP, we pass the base frame and ask C++ to just return success status.
-            val outBytes = ByteArray(nv21Bytes.size)
+            // Collect all frames to pass to JNI
+            val nv21Arrays = framesList.map { it.nv21Data }.toTypedArray()
+            val outBytes = ByteArray(baseFrame.nv21Data.size)
             
-            val statusCode = nativeProcessPassThrough(
+            val statusCode = nativeProcessMultiFrame(
                 baseFrame.width,
                 baseFrame.height,
-                nv21Bytes,
+                nv21Arrays,
+                baseIndex,
                 outBytes
             )
 
             val status = NativeStatus.fromCode(statusCode)
             if (status == NativeStatus.SUCCESS) {
-                logger.d("JniProcessingGateway", "Native processing succeeded (MVP Pass-through)")
-                NativeProcessResult.Success(baseFrame.width, baseFrame.height, outBytes)
+                logger.d("JniProcessingGateway", "Multi-frame processing of ${framesList.size} frames succeeded")
+                NativeProcessResult.Success(
+                    baseFrame.width, 
+                    baseFrame.height, 
+                    outBytes,
+                    baseFrame.metadata.rotationDegrees
+                )
             } else {
                 logger.e("JniProcessingGateway", "Native processing failed with code $statusCode")
                 NativeProcessResult.Fallback(baseFrame, "Native returned error $statusCode")
@@ -56,10 +63,11 @@ class JniProcessingGateway @Inject constructor(
         }
     }
 
-    private external fun nativeProcessPassThrough(
+    private external fun nativeProcessMultiFrame(
         width: Int,
         height: Int,
-        inNv21: ByteArray,
+        inNv21Arrays: Array<ByteArray>,
+        baseIndex: Int,
         outNv21: ByteArray
     ): Int
 }

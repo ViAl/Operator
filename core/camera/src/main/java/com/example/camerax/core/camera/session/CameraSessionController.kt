@@ -12,14 +12,20 @@ interface CameraSessionController {
     val currentCapabilities: StateFlow<CameraCapabilities?>
 
     /**
-     * Binds preview and analysis to lifecycle.
-     * @param onImageAvailable Callback out to UI/Orchestrator layers to inject into ZSL Buffer.
+     * Binds preview, analysis, and image capture to lifecycle.
+     * @param onImageAvailable Callback to inject ImageProxy frames into ZSL buffer.
      */
     fun bindToLifecycle(
         lifecycleOwner: LifecycleOwner,
         previewView: PreviewView,
         onImageAvailable: (ImageProxy) -> Unit
     )
+
+    /**
+     * Triggers a full-resolution still capture.
+     * Returns JPEG bytes (already includes EXIF rotation metadata — no manual rotation needed).
+     */
+    suspend fun capturePhoto(): ByteArray
 
     fun unbind()
 }

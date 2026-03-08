@@ -1,0 +1,267 @@
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :core:model:checkKotlinGradlePluginConfigurationErrors
+> Task :core:model:compileKotlin UP-TO-DATE
+> Task :core:model:compileJava NO-SOURCE
+> Task :core:model:processResources NO-SOURCE
+> Task :core:model:classes UP-TO-DATE
+> Task :core:model:jar UP-TO-DATE
+> Task :app:checkKotlinGradlePluginConfigurationErrors
+> Task :core:camera:preBuild UP-TO-DATE
+> Task :core:camera:preDebugBuild UP-TO-DATE
+> Task :core:camera:writeDebugAarMetadata UP-TO-DATE
+> Task :core:common:preBuild UP-TO-DATE
+> Task :core:common:preDebugBuild UP-TO-DATE
+> Task :core:common:writeDebugAarMetadata UP-TO-DATE
+> Task :core:native:preBuild UP-TO-DATE
+> Task :core:native:preDebugBuild UP-TO-DATE
+> Task :core:native:writeDebugAarMetadata UP-TO-DATE
+> Task :core:pipeline:preBuild UP-TO-DATE
+> Task :core:pipeline:preDebugBuild UP-TO-DATE
+> Task :core:pipeline:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:viewfinder:preBuild UP-TO-DATE
+> Task :feature:viewfinder:preDebugBuild UP-TO-DATE
+> Task :feature:viewfinder:writeDebugAarMetadata UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :core:camera:generateDebugResValues UP-TO-DATE
+> Task :core:camera:generateDebugResources UP-TO-DATE
+> Task :core:camera:packageDebugResources UP-TO-DATE
+> Task :core:common:generateDebugResValues UP-TO-DATE
+> Task :core:common:generateDebugResources UP-TO-DATE
+> Task :core:common:packageDebugResources UP-TO-DATE
+> Task :core:native:generateDebugResValues UP-TO-DATE
+> Task :core:native:generateDebugResources UP-TO-DATE
+> Task :core:native:packageDebugResources UP-TO-DATE
+> Task :core:pipeline:generateDebugResValues UP-TO-DATE
+> Task :core:pipeline:generateDebugResources UP-TO-DATE
+> Task :core:pipeline:packageDebugResources UP-TO-DATE
+> Task :feature:viewfinder:generateDebugResValues UP-TO-DATE
+> Task :feature:viewfinder:generateDebugResources UP-TO-DATE
+> Task :feature:viewfinder:packageDebugResources UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :core:camera:extractDeepLinksDebug UP-TO-DATE
+> Task :core:camera:processDebugManifest UP-TO-DATE
+> Task :core:common:extractDeepLinksDebug UP-TO-DATE
+> Task :core:common:processDebugManifest UP-TO-DATE
+> Task :core:native:extractDeepLinksDebug UP-TO-DATE
+> Task :core:native:processDebugManifest UP-TO-DATE
+> Task :core:pipeline:extractDeepLinksDebug UP-TO-DATE
+> Task :core:pipeline:processDebugManifest UP-TO-DATE
+> Task :feature:viewfinder:extractDeepLinksDebug UP-TO-DATE
+> Task :feature:viewfinder:processDebugManifest UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :core:camera:compileDebugLibraryResources UP-TO-DATE
+> Task :core:camera:parseDebugLocalResources UP-TO-DATE
+> Task :core:camera:generateDebugRFile UP-TO-DATE
+> Task :core:common:compileDebugLibraryResources UP-TO-DATE
+> Task :core:common:parseDebugLocalResources UP-TO-DATE
+> Task :core:common:generateDebugRFile UP-TO-DATE
+> Task :core:native:compileDebugLibraryResources UP-TO-DATE
+> Task :core:native:parseDebugLocalResources UP-TO-DATE
+> Task :core:native:generateDebugRFile UP-TO-DATE
+> Task :core:pipeline:compileDebugLibraryResources UP-TO-DATE
+> Task :core:pipeline:parseDebugLocalResources UP-TO-DATE
+> Task :core:pipeline:generateDebugRFile UP-TO-DATE
+> Task :feature:viewfinder:compileDebugLibraryResources UP-TO-DATE
+> Task :feature:viewfinder:parseDebugLocalResources UP-TO-DATE
+> Task :feature:viewfinder:generateDebugRFile UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :core:camera:checkKotlinGradlePluginConfigurationErrors
+> Task :core:common:checkKotlinGradlePluginConfigurationErrors
+> Task :core:common:kspDebugKotlin UP-TO-DATE
+> Task :core:common:compileDebugKotlin UP-TO-DATE
+> Task :core:common:javaPreCompileDebug UP-TO-DATE
+> Task :core:common:compileDebugJavaWithJavac UP-TO-DATE
+> Task :core:common:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:common:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:camera:kspDebugKotlin UP-TO-DATE
+> Task :core:camera:compileDebugKotlin UP-TO-DATE
+> Task :core:camera:javaPreCompileDebug UP-TO-DATE
+> Task :core:camera:compileDebugJavaWithJavac UP-TO-DATE
+> Task :core:common:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :core:camera:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:camera:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:native:checkKotlinGradlePluginConfigurationErrors
+> Task :core:native:kspDebugKotlin UP-TO-DATE
+> Task :core:native:compileDebugKotlin UP-TO-DATE
+> Task :core:native:javaPreCompileDebug UP-TO-DATE
+> Task :core:native:compileDebugJavaWithJavac UP-TO-DATE
+> Task :core:native:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:native:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:native:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :core:pipeline:checkKotlinGradlePluginConfigurationErrors
+> Task :core:pipeline:javaPreCompileDebug UP-TO-DATE
+> Task :core:camera:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :feature:viewfinder:checkKotlinGradlePluginConfigurationErrors
+> Task :feature:viewfinder:javaPreCompileDebug UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:mergeDebugShaders UP-TO-DATE
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :core:camera:mergeDebugShaders UP-TO-DATE
+> Task :core:camera:compileDebugShaders NO-SOURCE
+> Task :core:camera:generateDebugAssets UP-TO-DATE
+> Task :core:camera:packageDebugAssets UP-TO-DATE
+> Task :core:common:mergeDebugShaders UP-TO-DATE
+> Task :core:common:compileDebugShaders NO-SOURCE
+> Task :core:common:generateDebugAssets UP-TO-DATE
+> Task :core:common:packageDebugAssets UP-TO-DATE
+> Task :core:native:mergeDebugShaders UP-TO-DATE
+> Task :core:native:compileDebugShaders NO-SOURCE
+> Task :core:native:generateDebugAssets UP-TO-DATE
+> Task :core:native:packageDebugAssets UP-TO-DATE
+> Task :core:pipeline:mergeDebugShaders UP-TO-DATE
+> Task :core:pipeline:compileDebugShaders NO-SOURCE
+> Task :core:pipeline:generateDebugAssets UP-TO-DATE
+> Task :core:pipeline:packageDebugAssets UP-TO-DATE
+> Task :feature:viewfinder:mergeDebugShaders UP-TO-DATE
+> Task :feature:viewfinder:compileDebugShaders NO-SOURCE
+> Task :feature:viewfinder:generateDebugAssets UP-TO-DATE
+> Task :feature:viewfinder:packageDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets UP-TO-DATE
+> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:desugarDebugFileDependencies UP-TO-DATE
+> Task :core:camera:processDebugJavaRes UP-TO-DATE
+> Task :core:common:processDebugJavaRes UP-TO-DATE
+> Task :core:native:processDebugJavaRes UP-TO-DATE
+> Task :app:checkDebugDuplicateClasses UP-TO-DATE
+> Task :app:mergeExtDexDebug UP-TO-DATE
+> Task :core:camera:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :core:native:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :core:common:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :app:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:camera:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:camera:mergeDebugNativeLibs NO-SOURCE
+> Task :core:camera:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :core:common:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:common:mergeDebugNativeLibs NO-SOURCE
+> Task :core:common:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :core:native:configureCMakeDebug[arm64-v8a]
+> Task :core:native:buildCMakeDebug[arm64-v8a]
+> Task :core:native:configureCMakeDebug[armeabi-v7a]
+> Task :core:native:buildCMakeDebug[armeabi-v7a]
+> Task :core:native:configureCMakeDebug[x86]
+> Task :core:native:buildCMakeDebug[x86]
+> Task :core:native:configureCMakeDebug[x86_64]
+> Task :core:native:buildCMakeDebug[x86_64]
+> Task :core:native:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:native:mergeDebugNativeLibs UP-TO-DATE
+> Task :core:native:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :core:pipeline:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:pipeline:mergeDebugNativeLibs NO-SOURCE
+> Task :core:pipeline:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:viewfinder:mergeDebugJniLibFolders UP-TO-DATE
+> Task :feature:viewfinder:mergeDebugNativeLibs NO-SOURCE
+> Task :feature:viewfinder:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :app:mergeDebugNativeLibs UP-TO-DATE
+> Task :app:stripDebugDebugSymbols UP-TO-DATE
+> Task :app:validateSigningDebug UP-TO-DATE
+> Task :app:writeDebugAppMetadata UP-TO-DATE
+> Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :core:camera:stripDebugDebugSymbols NO-SOURCE
+> Task :core:camera:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :core:camera:extractDebugAnnotations UP-TO-DATE
+> Task :core:camera:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :core:camera:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :core:camera:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :core:camera:prepareDebugArtProfile UP-TO-DATE
+> Task :core:camera:prepareLintJarForPublish UP-TO-DATE
+> Task :core:camera:mergeDebugJavaResource UP-TO-DATE
+> Task :core:camera:syncDebugLibJars UP-TO-DATE
+> Task :core:camera:bundleDebugAar UP-TO-DATE
+> Task :core:camera:assembleDebug UP-TO-DATE
+> Task :core:common:stripDebugDebugSymbols NO-SOURCE
+> Task :core:common:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :core:common:extractDebugAnnotations UP-TO-DATE
+> Task :core:common:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :core:common:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :core:common:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :core:common:prepareDebugArtProfile UP-TO-DATE
+> Task :core:common:prepareLintJarForPublish UP-TO-DATE
+> Task :core:common:mergeDebugJavaResource UP-TO-DATE
+> Task :core:common:syncDebugLibJars UP-TO-DATE
+> Task :core:common:bundleDebugAar UP-TO-DATE
+> Task :core:common:assembleDebug UP-TO-DATE
+> Task :core:native:stripDebugDebugSymbols UP-TO-DATE
+> Task :core:native:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :core:native:extractDebugAnnotations UP-TO-DATE
+> Task :core:native:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :core:native:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :core:native:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :core:native:prepareDebugArtProfile UP-TO-DATE
+> Task :core:native:prepareLintJarForPublish UP-TO-DATE
+> Task :core:native:mergeDebugJavaResource UP-TO-DATE
+> Task :core:native:syncDebugLibJars UP-TO-DATE
+> Task :core:native:bundleDebugAar UP-TO-DATE
+> Task :core:native:assembleDebug UP-TO-DATE
+> Task :core:pipeline:stripDebugDebugSymbols NO-SOURCE
+> Task :core:pipeline:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :core:pipeline:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :core:pipeline:prepareDebugArtProfile UP-TO-DATE
+> Task :core:pipeline:prepareLintJarForPublish UP-TO-DATE
+> Task :feature:viewfinder:stripDebugDebugSymbols NO-SOURCE
+> Task :feature:viewfinder:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :feature:viewfinder:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :feature:viewfinder:prepareDebugArtProfile UP-TO-DATE
+> Task :feature:viewfinder:prepareLintJarForPublish UP-TO-DATE
+> Task :core:pipeline:kspDebugKotlin
+
+> Task :core:pipeline:compileDebugKotlin
+w: file:///C:/Projects/Hobby/Operator/core/pipeline/src/main/java/com/example/camerax/core/pipeline/zsl/InMemoryZslFrameBuffer.kt:87:17 The value 'e' assigned to 'var minElem: T defined in com.example.camerax.core.pipeline.zsl.InMemoryZslFrameBuffer.indexOfMinBy' is never used
+
+> Task :core:pipeline:compileDebugJavaWithJavac
+> Task :core:pipeline:processDebugJavaRes
+> Task :core:pipeline:extractDebugAnnotations
+> Task :core:pipeline:mergeDebugJavaResource
+> Task :core:pipeline:transformDebugClassesWithAsm
+> Task :core:pipeline:bundleLibCompileToJarDebug
+> Task :core:pipeline:bundleLibRuntimeToJarDebug
+> Task :core:pipeline:bundleLibRuntimeToDirDebug
+> Task :core:pipeline:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :core:pipeline:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :core:pipeline:syncDebugLibJars
+> Task :core:pipeline:bundleDebugAar
+> Task :core:pipeline:assembleDebug
+> Task :feature:viewfinder:kspDebugKotlin
+> Task :feature:viewfinder:compileDebugKotlin
+> Task :feature:viewfinder:compileDebugJavaWithJavac
+> Task :feature:viewfinder:processDebugJavaRes
+> Task :feature:viewfinder:extractDebugAnnotations
+> Task :feature:viewfinder:mergeDebugJavaResource
+> Task :feature:viewfinder:transformDebugClassesWithAsm
+> Task :feature:viewfinder:bundleLibCompileToJarDebug
+> Task :feature:viewfinder:bundleLibRuntimeToJarDebug
+> Task :feature:viewfinder:bundleLibRuntimeToDirDebug
+> Task :feature:viewfinder:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :feature:viewfinder:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :feature:viewfinder:syncDebugLibJars
+> Task :feature:viewfinder:bundleDebugAar
+> Task :feature:viewfinder:assembleDebug
+> Task :app:mergeLibDexDebug
+> Task :app:kspDebugKotlin
+> Task :app:compileDebugKotlin
+> Task :app:compileDebugJavaWithJavac
+> Task :app:hiltAggregateDepsDebug
+> Task :app:hiltJavaCompileDebug
+> Task :app:processDebugJavaRes
+> Task :app:transformDebugClassesWithAsm
+> Task :app:dexBuilderDebug
+> Task :app:mergeDebugGlobalSynthetics
+> Task :app:mergeProjectDexDebug
+> Task :app:mergeDebugJavaResource
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+
+BUILD SUCCESSFUL in 21s
+219 actionable tasks: 53 executed, 166 up-to-date
