@@ -5,5 +5,7 @@ data class FrameMetadata(
     val exposureTimeNs: Long,
     val iso: Int,
     val lensPosition: Float,
-    val rotationDegrees: Int = 0
+    val rotationDegrees: Int = 0,
+    val exposureCompensationIndex: Int = 0,
+    val exposureClass: ExposureClass = ExposureClass.NORMAL
 )

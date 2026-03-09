@@ -2,6 +2,7 @@ package com.example.camerax.core.nativebridge
 
 import com.example.camerax.core.common.dispatchers.AppDispatchers
 import com.example.camerax.core.common.logger.Logger
+import com.example.camerax.core.model.capture.ExposureClass
 import com.example.camerax.core.model.pipeline.NativeProcessRequest
 import com.example.camerax.core.model.pipeline.NativeProcessResult
 import kotlinx.coroutines.withContext
@@ -28,28 +29,36 @@ class JniProcessingGateway @Inject constructor(
                 return@withContext NativeProcessResult.Error("Burst is empty")
             }
 
-            // Burst alignment base frame
             val baseIndex = framesList.size / 2
             val baseFrame = framesList[baseIndex]
-            
-            // Collect all frames to pass to JNI
+
             val nv21Arrays = framesList.map { it.nv21Data }.toTypedArray()
+            val exposureTimeNs = LongArray(framesList.size) { idx -> framesList[idx].metadata.exposureTimeNs }
+            val isoValues = IntArray(framesList.size) { idx -> framesList[idx].metadata.iso }
+
+            val shortExposureIndex = framesList.indexOfFirst { it.metadata.exposureClass == ExposureClass.SHORT }
             val outBytes = ByteArray(baseFrame.nv21Data.size)
-            
+
             val statusCode = nativeProcessMultiFrame(
                 baseFrame.width,
                 baseFrame.height,
                 nv21Arrays,
                 baseIndex,
+                shortExposureIndex,
+                exposureTimeNs,
+                isoValues,
                 outBytes
             )
 
             val status = NativeStatus.fromCode(statusCode)
             if (status == NativeStatus.SUCCESS) {
-                logger.d("JniProcessingGateway", "Multi-frame processing of ${framesList.size} frames succeeded")
+                logger.d(
+                    "JniProcessingGateway",
+                    "Multi-frame processing succeeded: frames=${framesList.size}, base=$baseIndex, short=$shortExposureIndex"
+                )
                 NativeProcessResult.Success(
-                    baseFrame.width, 
-                    baseFrame.height, 
+                    baseFrame.width,
+                    baseFrame.height,
                     outBytes,
                     baseFrame.metadata.rotationDegrees
                 )
@@ -68,6 +77,9 @@ class JniProcessingGateway @Inject constructor(
         height: Int,
         inNv21Arrays: Array<ByteArray>,
         baseIndex: Int,
+        shortExposureIndex: Int,
+        exposureTimeNs: LongArray,
+        isoValues: IntArray,
         outNv21: ByteArray
     ): Int
 }

@@ -7,37 +7,37 @@
 
 namespace cameraxmvp {
 
-// ─── Tunable constants ────────────────────────────────────────────────────────
-static constexpr int   BLOCK_SIZE      = 32;    // Local alignment block (pixels)
-static constexpr int   SEARCH_RANGE    = 12;    // ±pixels for local SAD search
-static constexpr float SAD_THRESHOLD   = 20.0f; // Normalized SAD → confidence=0 above this
-static constexpr float GHOST_THRESHOLD = 0.6f;  // motion_score above this → base-frame only
-static constexpr float SHARP_EPSILON   = 1.0f;  // Prevent zero sharpness weight
-static constexpr float SHARP_CLAMP     = 40.0f; // Clamp sharpness to avoid noise boosting
-static constexpr float TONE_ALPHA      = 0.25f; // Local contrast boost strength
-static constexpr int   TONE_BLUR_R     = 8;     // Box-blur radius for tone mapping
+static constexpr int   BLOCK_SIZE      = 32;
+static constexpr int   SEARCH_RANGE    = 12;
+static constexpr float SAD_THRESHOLD   = 20.0f;
+static constexpr float GHOST_THRESHOLD = 0.6f;
+static constexpr float SHARP_EPSILON   = 1.0f;
+static constexpr float SHARP_CLAMP     = 40.0f;
+static constexpr float TONE_ALPHA      = 0.20f;
+static constexpr int   TONE_BLUR_R     = 8;
 
-/*
- * Motion-Aware Multi-Frame Merge.
- *
- * Algorithm stages per ProcessMultiFrame() call:
- *   1. Local block alignment   — per-block SAD search on Y plane
- *   2. Confidence / motion map — normalized SAD per block
- *   3. Deghosting mask         — low-confidence blocks fall back to base frame
- *   4. Sharpness-aware weights — gradient-energy sharpness proxy per block
- *   5. Weighted merge          — Y and VU accumulated with per-block weights
- *   6. Mild local tone mapping — unsharp-mask boost on Y, attenuated on motion blocks
- */
+static constexpr int   HIGHLIGHT_START = 220;
+static constexpr int   HIGHLIGHT_END   = 250;
+static constexpr float HDR_BLEND_MAX   = 0.70f;
+static constexpr float SHADOW_LIFT_MAX = 1.05f;
+
+static constexpr float MIN_EXPOSURE_RATIO = 1.35f;
+static constexpr float MIN_MEAN_LUMA_DELTA = 8.0f;
+static constexpr float MIN_HIGHLIGHT_PIXELS_RATIO = 0.01f;
+static constexpr float MAX_SHORT_FRAME_DARKNESS_PENALTY = 0.72f;
+static constexpr float MAX_SHORT_BLACK_PIXELS_RATIO = 0.45f;
+
 class CameraEngine {
 public:
     CameraEngine();
     ~CameraEngine();
 
-    // Public interface unchanged from previous version — JNI bridge untouched.
-    // Returns 0 on SUCCESS, 1 on argument error.
     int ProcessMultiFrame(int width, int height,
                           const std::vector<const uint8_t*>& frames,
                           int baseIndex,
+                          int shortExposureIndex,
+                          const std::vector<int64_t>& exposureTimeNs,
+                          const std::vector<int>& isoValues,
                           uint8_t* outBytes, int size);
 
     struct DebugStats {
@@ -53,15 +53,14 @@ public:
         bool valid = false;
     };
 
-    // Safe readback for host-side benchmarks/tuning.
     bool GetLastRunDebugStats(DebugStats* outStats) const;
 
 private:
     struct BlockMotion {
         int dx = 0;
         int dy = 0;
-        float confidence = 0.0f; // [0, 1]
-        float sharpness  = 0.0f; // gradient energy proxy
+        float confidence = 0.0f;
+        float sharpness  = 0.0f;
     };
 
     struct MotionStats {
@@ -72,12 +71,10 @@ private:
         int samples = 0;
     };
 
-    // Stage 1 + 2: local block alignment and confidence for one (frame, block)
     BlockMotion AlignBlock(const uint8_t* baseY, const uint8_t* srcY,
                            int width, int height,
                            int blockCol, int blockRow) const;
 
-    // Stage 4: gradient-energy sharpness estimate for one block in baseY
     float ComputeBlockSharpness(const uint8_t* Y, int width, int height,
                                 int blockCol, int blockRow) const;
 
@@ -106,13 +103,24 @@ private:
                      std::vector<float>& weight,
                      uint8_t* outVU) const;
 
+    void ApplyHdrFusion(const std::vector<const uint8_t*>& frames,
+                        int width,
+                        int height,
+                        int baseIndex,
+                        int shortExposureIndex,
+                        const std::vector<int64_t>& exposureTimeNs,
+                        const std::vector<int>& isoValues,
+                        int blockCols,
+                        int blockRows,
+                        const std::vector<BlockMotion>& motionField,
+                        uint8_t* mergedY) const;
+
     void BuildToneConfidenceMap(const std::vector<BlockMotion>& motionField,
                                 int numFrames,
                                 int baseIndex,
                                 int numBlocks,
                                 std::vector<float>& toneConfMap) const;
 
-    // Stage 6: in-place mild local tone map on Y plane.
     void LocalToneMap(uint8_t* Y, int width, int height,
                       const std::vector<float>& confidenceMap,
                       int blockCols, int blockRows,
@@ -134,4 +142,4 @@ private:
 };
 
 } // namespace cameraxmvp
-#endif // CAMERA_ENGINE_H
+#endif
