@@ -7,77 +7,192 @@
  *  1. Local block alignment  (32×32 blocks, SAD on Y, ±12 px search, stride 2)
  *  2. Confidence / motion map (normalized SAD → [0,1])
  *  3. Deghosting mask         (motion_score > GHOST_THRESHOLD → base frame only)
- *  4. Sharpness-aware weight  (Laplacian energy proxy × confidence)
+ *  4. Sharpness-aware weight  (gradient-energy proxy × confidence)
  *  5. Weighted merge          (Y exact pixel, VU block-level, base always w=1)
  *  6. Mild local tone mapping (unsharp-mask, alpha=0.25, attenuated on motion)
  */
 
 #include "camera_engine.h"
-#include <cstring>
-#include <cmath>
-#include <algorithm>
-#include <numeric>
-#include <android/log.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <new>
+
+#if defined(__ANDROID__)
+#include <android/log.h>
 #define LOG_TAG "CameraEngineNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGI(...) do { std::fprintf(stdout, "[I] " __VA_ARGS__); std::fprintf(stdout, "\n"); } while (0)
+#define LOGD(...) do { std::fprintf(stdout, "[D] " __VA_ARGS__); std::fprintf(stdout, "\n"); } while (0)
+#define LOGE(...) do { std::fprintf(stderr, "[E] " __VA_ARGS__); std::fprintf(stderr, "\n"); } while (0)
+#endif
 
 namespace cameraxmvp {
+namespace {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constructor / Destructor
-// ─────────────────────────────────────────────────────────────────────────────
-CameraEngine::CameraEngine()  { LOGI("CameraEngine constructed (motion-aware merge v2)"); }
+inline float Clamp01(float v) {
+    return std::min(1.0f, std::max(0.0f, v));
+}
+
+inline int MotionIndex(int frameIdx, int blockIdx, int numBlocks) {
+    return frameIdx * numBlocks + blockIdx;
+}
+
+void CopyBaseFrame(const uint8_t* baseFrame, uint8_t* outBytes, int totalSize) {
+    std::memcpy(outBytes, baseFrame, static_cast<size_t>(totalSize));
+}
+
+// Sharpness from a block in Y using an optional pixel offset.
+float ComputeSharpnessAtOffset(const uint8_t* yPlane,
+                               int width,
+                               int height,
+                               int blockCol,
+                               int blockRow,
+                               int offsetX,
+                               int offsetY) {
+    const int bx = blockCol * BLOCK_SIZE;
+    const int by = blockRow * BLOCK_SIZE;
+    const int bw = std::min(BLOCK_SIZE, width - bx);
+    const int bh = std::min(BLOCK_SIZE, height - by);
+
+    if (bw <= 1 || bh <= 1) {
+        return 0.0f;
+    }
+
+    float energy = 0.0f;
+    int count = 0;
+
+    for (int py = 0; py < bh - 1; py += 2) {
+        for (int px = 0; px < bw - 1; px += 2) {
+            const int x = std::clamp(bx + px + offsetX, 0, width - 2);
+            const int y = std::clamp(by + py + offsetY, 0, height - 2);
+
+            const float gx = static_cast<float>(yPlane[y * width + (x + 1)])
+                           - static_cast<float>(yPlane[y * width + x]);
+            const float gy = static_cast<float>(yPlane[(y + 1) * width + x])
+                           - static_cast<float>(yPlane[y * width + x]);
+            energy += gx * gx + gy * gy;
+            count++;
+        }
+    }
+
+    if (count == 0) {
+        return 0.0f;
+    }
+
+    const float meanEnergy = energy / static_cast<float>(count);
+    return std::min(meanEnergy, SHARP_CLAMP);
+}
+
+} // namespace
+
+CameraEngine::CameraEngine() { LOGI("CameraEngine constructed (motion-aware merge v4)"); }
 CameraEngine::~CameraEngine() { LOGI("CameraEngine destroyed"); }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Stage 1 + 2: AlignBlock
-//   Finds the (dx, dy) that minimises SAD between a 32×32 block in baseY and
-//   the same block position in srcY.  Returns BlockMotion with dx/dy and a
-//   confidence score [0,1] derived from normalised SAD.
-// ─────────────────────────────────────────────────────────────────────────────
-CameraEngine::BlockMotion CameraEngine::AlignBlock(
-        const uint8_t* baseY, const uint8_t* srcY,
-        int width, int height,
-        int blockCol, int blockRow) const
-{
+bool CameraEngine::GetLastRunDebugStats(DebugStats* outStats) const {
+    if (outStats == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(statsMutex_);
+    *outStats = lastStats_;
+    return lastStats_.valid;
+}
+
+void CameraEngine::UpdateDebugStats(const MotionStats& motionStats,
+                                    int numBlocks,
+                                    int numFrames,
+                                    long long alignMs,
+                                    long long mergeYMs,
+                                    long long mergeVuMs,
+                                    long long toneMs,
+                                    long long totalMs,
+                                    bool valid) {
+    std::lock_guard<std::mutex> lock(statsMutex_);
+
+    lastStats_.alignMs = alignMs;
+    lastStats_.mergeYMs = mergeYMs;
+    lastStats_.mergeVuMs = mergeVuMs;
+    lastStats_.toneMs = toneMs;
+    lastStats_.totalMs = totalMs;
+    lastStats_.valid = valid;
+
+    if (!valid || motionStats.samples <= 0) {
+        lastStats_.avgConfidence = 0.0f;
+        lastStats_.ghostedBlockRatio = 0.0f;
+        lastStats_.avgAbsDx = 0.0f;
+        lastStats_.avgAbsDy = 0.0f;
+        return;
+    }
+
+    const int totalMotionBlocks = numBlocks * std::max(0, numFrames - 1);
+    lastStats_.avgConfidence = motionStats.confidenceSum / static_cast<float>(motionStats.samples);
+    lastStats_.ghostedBlockRatio = (totalMotionBlocks > 0)
+            ? (static_cast<float>(motionStats.ghostedBlocks) / static_cast<float>(totalMotionBlocks))
+            : 0.0f;
+    lastStats_.avgAbsDx = motionStats.dxAbsSum / static_cast<float>(motionStats.samples);
+    lastStats_.avgAbsDy = motionStats.dyAbsSum / static_cast<float>(motionStats.samples);
+}
+
+CameraEngine::BlockMotion CameraEngine::AlignBlock(const uint8_t* baseY,
+                                                    const uint8_t* srcY,
+                                                    int width,
+                                                    int height,
+                                                    int blockCol,
+                                                    int blockRow) const {
     BlockMotion result;
 
     const int bx = blockCol * BLOCK_SIZE;
     const int by = blockRow * BLOCK_SIZE;
-    const int bw = std::min(BLOCK_SIZE, width  - bx);
+    const int bw = std::min(BLOCK_SIZE, width - bx);
     const int bh = std::min(BLOCK_SIZE, height - by);
-    if (bw <= 0 || bh <= 0) return result;
+    if (bw <= 0 || bh <= 0) {
+        return result;
+    }
 
-    const int pixelCount = (bw / 2) * (bh / 2); // strided samples
-    if (pixelCount == 0) return result;
+    const int sampleCount = ((bw + 1) / 2) * ((bh + 1) / 2);
+    if (sampleCount <= 0) {
+        return result;
+    }
 
-    int   bestSad = INT32_MAX;
-    int   bestDx  = 0, bestDy = 0;
+    int bestSad = std::numeric_limits<int>::max();
+    int bestDx = 0;
+    int bestDy = 0;
 
-    for (int dy = -SEARCH_RANGE; dy <= SEARCH_RANGE; dy++) {
-        for (int dx = -SEARCH_RANGE; dx <= SEARCH_RANGE; dx++) {
+    for (int dy = -SEARCH_RANGE; dy <= SEARCH_RANGE; ++dy) {
+        for (int dx = -SEARCH_RANGE; dx <= SEARCH_RANGE; ++dx) {
             int sad = 0;
+            bool abortCandidate = false;
 
-            for (int py = 0; py < bh; py += 2) {      // stride 2 for speed
+            for (int py = 0; py < bh && !abortCandidate; py += 2) {
                 for (int px = 0; px < bw; px += 2) {
-                    const int basePx = bx + px;
-                    const int basePy = by + py;
+                    const int baseX = bx + px;
+                    const int baseYPos = by + py;
 
-                    const int curPx = std::clamp(basePx + dx, 0, width  - 1);
-                    const int curPy = std::clamp(basePy + dy, 0, height - 1);
+                    const int srcX = std::clamp(baseX + dx, 0, width - 1);
+                    const int srcYPos = std::clamp(baseYPos + dy, 0, height - 1);
 
-                    sad += std::abs((int)baseY[basePy * width + basePx]
-                                  - (int)srcY [curPy  * width + curPx]);
+                    sad += std::abs(static_cast<int>(baseY[baseYPos * width + baseX])
+                                  - static_cast<int>(srcY[srcYPos * width + srcX]));
+
+                    // Early prune current candidate once it cannot beat best SAD.
+                    if (sad >= bestSad) {
+                        abortCandidate = true;
+                        break;
+                    }
                 }
             }
 
             if (sad < bestSad) {
                 bestSad = sad;
-                bestDx  = dx;
-                bestDy  = dy;
+                bestDx = dx;
+                bestDy = dy;
             }
         }
     }
@@ -85,349 +200,455 @@ CameraEngine::BlockMotion CameraEngine::AlignBlock(
     result.dx = bestDx;
     result.dy = bestDy;
 
-    // Normalised SAD: divide by number of strided samples.
-    // Values below SAD_THRESHOLD (≈20 per pixel) → high confidence.
-    const float normSad    = static_cast<float>(bestSad) / static_cast<float>(pixelCount);
-    const float confidence = std::max(0.0f, 1.0f - normSad / SAD_THRESHOLD);
-    result.confidence = confidence;
+    const float normalizedSad = static_cast<float>(bestSad) / static_cast<float>(sampleCount);
+    result.confidence = Clamp01(1.0f - normalizedSad / SAD_THRESHOLD);
 
     return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Stage 4: ComputeBlockSharpness
-//   Estimates local sharpness via gradient energy (|∇I|²) over the block
-//   using a simple horizontal+vertical first-difference proxy.
-//   Result clamped to [0, SHARP_CLAMP] to prevent noisy frames inflating weight.
-// ─────────────────────────────────────────────────────────────────────────────
-float CameraEngine::ComputeBlockSharpness(
-        const uint8_t* Y, int width, int height,
-        int blockCol, int blockRow) const
-{
-    const int bx = blockCol * BLOCK_SIZE;
-    const int by = blockRow * BLOCK_SIZE;
-    const int bw = std::min(BLOCK_SIZE, width  - bx);
-    const int bh = std::min(BLOCK_SIZE, height - by);
-
-    float energy = 0.0f;
-    int   count  = 0;
-
-    for (int py = 0; py < bh - 1; py += 2) {    // stride 2
-        for (int px = 0; px < bw - 1; px += 2) {
-            const int x = bx + px;
-            const int y = by + py;
-            const float gx = (float)Y[y * width + (x + 1)] - (float)Y[y * width + x];
-            const float gy = (float)Y[(y + 1) * width + x] - (float)Y[y * width + x];
-            energy += gx * gx + gy * gy;
-            count++;
-        }
-    }
-
-    if (count == 0) return 0.0f;
-    return std::min(energy / static_cast<float>(count), SHARP_CLAMP);
+float CameraEngine::ComputeBlockSharpness(const uint8_t* Y,
+                                          int width,
+                                          int height,
+                                          int blockCol,
+                                          int blockRow) const {
+    return ComputeSharpnessAtOffset(Y, width, height, blockCol, blockRow, 0, 0);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Stage 6: LocalToneMap
-//   Applies a mild unsharp-mask style local contrast boost to the Y plane.
-//   Uses a fast horizontal+vertical separated box blur (radius TONE_BLUR_R).
-//   Boost is attenuated per-block based on the minimum confidence across frames
-//   (motion regions get less boost to avoid enhancing ghost edges).
-// ─────────────────────────────────────────────────────────────────────────────
-void CameraEngine::LocalToneMap(
-        uint8_t* Y, int width, int height,
-        const std::vector<float>& minConfMap,
-        int blockCols, int blockRows) const
-{
-    const int R = TONE_BLUR_R;
-    std::vector<float> blurred(width * height, 0.0f);
-    std::vector<float> tmp(width * height, 0.0f);
+CameraEngine::MotionStats CameraEngine::BuildMotionField(
+        const std::vector<const uint8_t*>& frames,
+        int baseIndex,
+        const uint8_t* baseY,
+        int width,
+        int height,
+        int blockCols,
+        int blockRows,
+        std::vector<BlockMotion>& motionField) const {
+    MotionStats stats;
 
-    // Horizontal box blur
-    for (int y = 0; y < height; y++) {
-        float sum = 0.0f;
-        int   cnt = 0;
-        for (int x = 0; x < std::min(R, width); x++) { sum += Y[y * width + x]; cnt++; }
+    const int numFrames = static_cast<int>(frames.size());
+    const int numBlocks = blockCols * blockRows;
 
-        for (int x = 0; x < width; x++) {
-            const int addX = x + R;
-            const int remX = x - R - 1;
-            if (addX < width) { sum += Y[y * width + addX]; cnt++; }
-            if (remX >= 0)    { sum -= Y[y * width + remX]; cnt--; }
-            tmp[y * width + x] = sum / static_cast<float>(std::max(cnt, 1));
+    std::vector<float> baseSharpness(numBlocks, 0.0f);
+    for (int br = 0; br < blockRows; ++br) {
+        for (int bc = 0; bc < blockCols; ++bc) {
+            const int blockIdx = br * blockCols + bc;
+            baseSharpness[blockIdx] = ComputeBlockSharpness(baseY, width, height, bc, br);
         }
     }
 
-    // Vertical box blur
-    for (int x = 0; x < width; x++) {
-        float sum = 0.0f;
-        int   cnt = 0;
-        for (int y = 0; y < std::min(R, height); y++) { sum += tmp[y * width + x]; cnt++; }
+    for (int f = 0; f < numFrames; ++f) {
+        if (f == baseIndex) {
+            for (int b = 0; b < numBlocks; ++b) {
+                BlockMotion& bm = motionField[MotionIndex(f, b, numBlocks)];
+                bm.dx = 0;
+                bm.dy = 0;
+                bm.confidence = 1.0f;
+                bm.sharpness = baseSharpness[b];
+            }
+            continue;
+        }
 
-        for (int y = 0; y < height; y++) {
-            const int addY = y + R;
-            const int remY = y - R - 1;
-            if (addY < height) { sum += tmp[addY * width + x]; cnt++; }
-            if (remY >= 0)     { sum -= tmp[remY * width + x]; cnt--; }
-            blurred[y * width + x] = sum / static_cast<float>(std::max(cnt, 1));
+        const uint8_t* srcY = frames[f];
+        for (int br = 0; br < blockRows; ++br) {
+            for (int bc = 0; bc < blockCols; ++bc) {
+                const int blockIdx = br * blockCols + bc;
+                BlockMotion bm = AlignBlock(baseY, srcY, width, height, bc, br);
+                bm.sharpness = ComputeSharpnessAtOffset(srcY, width, height, bc, br, bm.dx, bm.dy);
+                motionField[MotionIndex(f, blockIdx, numBlocks)] = bm;
+
+                stats.confidenceSum += bm.confidence;
+                stats.dxAbsSum += std::abs(bm.dx);
+                stats.dyAbsSum += std::abs(bm.dy);
+                stats.samples++;
+
+                const float motionScore = 1.0f - bm.confidence;
+                if (motionScore > GHOST_THRESHOLD) {
+                    stats.ghostedBlocks++;
+                }
+            }
         }
     }
 
-    // Apply: Y = Y + alpha × (Y - blurred), attenuated by per-block confidence
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
+    return stats;
+}
+
+void CameraEngine::MergeLuma(const std::vector<const uint8_t*>& frames,
+                             int baseIndex,
+                             int width,
+                             int height,
+                             int blockCols,
+                             int blockRows,
+                             const std::vector<BlockMotion>& motionField,
+                             std::vector<float>& accum,
+                             std::vector<float>& weight,
+                             uint8_t* outY) const {
+    const int numFrames = static_cast<int>(frames.size());
+    const int numBlocks = blockCols * blockRows;
+    const int ySize = width * height;
+    const uint8_t* baseY = frames[baseIndex];
+
+    accum.assign(static_cast<size_t>(ySize), 0.0f);
+    weight.assign(static_cast<size_t>(ySize), 0.0f);
+
+    for (int i = 0; i < ySize; ++i) {
+        accum[i] = static_cast<float>(baseY[i]);
+        weight[i] = 1.0f;
+    }
+
+    for (int f = 0; f < numFrames; ++f) {
+        if (f == baseIndex) {
+            continue;
+        }
+
+        const uint8_t* srcY = frames[f];
+        for (int br = 0; br < blockRows; ++br) {
+            for (int bc = 0; bc < blockCols; ++bc) {
+                const int blockIdx = br * blockCols + bc;
+                const BlockMotion& bm = motionField[MotionIndex(f, blockIdx, numBlocks)];
+                const float motionScore = 1.0f - bm.confidence;
+                if (motionScore > GHOST_THRESHOLD) {
+                    continue;
+                }
+
+                const float sharpTerm = std::sqrt(std::min(bm.sharpness, SHARP_CLAMP) + SHARP_EPSILON);
+                const float w = bm.confidence * sharpTerm;
+                if (w <= 0.0f) {
+                    continue;
+                }
+
+                const int bx = bc * BLOCK_SIZE;
+                const int by = br * BLOCK_SIZE;
+                const int bw = std::min(BLOCK_SIZE, width - bx);
+                const int bh = std::min(BLOCK_SIZE, height - by);
+
+                for (int py = 0; py < bh; ++py) {
+                    for (int px = 0; px < bw; ++px) {
+                        const int dstX = bx + px;
+                        const int dstY = by + py;
+                        const int srcX = std::clamp(dstX + bm.dx, 0, width - 1);
+                        const int srcYPos = std::clamp(dstY + bm.dy, 0, height - 1);
+                        const int dstIdx = dstY * width + dstX;
+
+                        accum[dstIdx] += w * static_cast<float>(srcY[srcYPos * width + srcX]);
+                        weight[dstIdx] += w;
+                    }
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < ySize; ++i) {
+        const float w = std::max(weight[i], 1e-6f);
+        outY[i] = static_cast<uint8_t>(std::clamp(static_cast<int>(accum[i] / w + 0.5f), 0, 255));
+    }
+}
+
+void CameraEngine::MergeChroma(const std::vector<const uint8_t*>& frames,
+                               int baseIndex,
+                               int width,
+                               int height,
+                               int blockCols,
+                               int blockRows,
+                               const std::vector<BlockMotion>& motionField,
+                               std::vector<float>& accum,
+                               std::vector<float>& weight,
+                               uint8_t* outVU) const {
+    const int numFrames = static_cast<int>(frames.size());
+    const int numBlocks = blockCols * blockRows;
+    const int ySize = width * height;
+    const int vuSize = ySize / 2;
+    const int uvW = width / 2;
+    const int uvH = height / 2;
+
+    const uint8_t* baseFrame = frames[baseIndex];
+
+    accum.assign(static_cast<size_t>(vuSize), 0.0f);
+    weight.assign(static_cast<size_t>(vuSize), 0.0f);
+
+    for (int i = 0; i < vuSize; ++i) {
+        accum[i] = static_cast<float>(baseFrame[ySize + i]);
+        weight[i] = 1.0f;
+    }
+
+    for (int f = 0; f < numFrames; ++f) {
+        if (f == baseIndex) {
+            continue;
+        }
+
+        const uint8_t* src = frames[f];
+        for (int br = 0; br < blockRows; ++br) {
+            for (int bc = 0; bc < blockCols; ++bc) {
+                const int blockIdx = br * blockCols + bc;
+                const BlockMotion& bm = motionField[MotionIndex(f, blockIdx, numBlocks)];
+                const float motionScore = 1.0f - bm.confidence;
+                if (motionScore > GHOST_THRESHOLD) {
+                    continue;
+                }
+
+                // Conservative chroma merge: confidence-only weighting and reduced gain
+                // to limit hue smearing across block boundaries in motion-heavy areas.
+                const float w = bm.confidence * 0.5f;
+                if (w <= 0.0f) {
+                    continue;
+                }
+
+                const int uvDx = bm.dx / 2;
+                const int uvDy = bm.dy / 2;
+
+                const int uvBx = (bc * BLOCK_SIZE) / 2;
+                const int uvBy = (br * BLOCK_SIZE) / 2;
+                const int uvBw = std::min(BLOCK_SIZE / 2, uvW - uvBx);
+                const int uvBh = std::min(BLOCK_SIZE / 2, uvH - uvBy);
+
+                for (int vy = 0; vy < uvBh; ++vy) {
+                    for (int vx = 0; vx < uvBw; ++vx) {
+                        const int dstVx = uvBx + vx;
+                        const int dstVy = uvBy + vy;
+                        const int srcVx = std::clamp(dstVx + uvDx, 0, uvW - 1);
+                        const int srcVy = std::clamp(dstVy + uvDy, 0, uvH - 1);
+
+                        const int dstIdx = (dstVy * uvW + dstVx) * 2;
+                        const int srcIdx = (srcVy * uvW + srcVx) * 2;
+
+                        accum[dstIdx] += w * static_cast<float>(src[ySize + srcIdx]);
+                        accum[dstIdx + 1] += w * static_cast<float>(src[ySize + srcIdx + 1]);
+                        weight[dstIdx] += w;
+                        weight[dstIdx + 1] += w;
+                    }
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < vuSize; ++i) {
+        const float w = std::max(weight[i], 1e-6f);
+        outVU[i] = static_cast<uint8_t>(std::clamp(static_cast<int>(accum[i] / w + 0.5f), 0, 255));
+    }
+}
+
+void CameraEngine::BuildToneConfidenceMap(const std::vector<BlockMotion>& motionField,
+                                          int numFrames,
+                                          int baseIndex,
+                                          int numBlocks,
+                                          std::vector<float>& toneConfMap) const {
+    toneConfMap.assign(static_cast<size_t>(numBlocks), 1.0f);
+    if (numFrames <= 1) {
+        return;
+    }
+
+    // Blend min and mean confidence per block to avoid one bad frame from fully
+    // killing local contrast boost. This reduces aggressive over-attenuation.
+    constexpr float kMinBlend = 0.35f;
+    constexpr float kMeanBlend = 0.65f;
+
+    for (int b = 0; b < numBlocks; ++b) {
+        float minConf = 1.0f;
+        float sumConf = 0.0f;
+        int count = 0;
+        for (int f = 0; f < numFrames; ++f) {
+            if (f == baseIndex) {
+                continue;
+            }
+            const float conf = motionField[MotionIndex(f, b, numBlocks)].confidence;
+            minConf = std::min(minConf, conf);
+            sumConf += conf;
+            count++;
+        }
+
+        const float meanConf = (count > 0) ? (sumConf / static_cast<float>(count)) : 1.0f;
+        const float blended = kMinBlend * minConf + kMeanBlend * meanConf;
+        toneConfMap[b] = Clamp01(blended);
+    }
+}
+
+void CameraEngine::LocalToneMap(uint8_t* Y,
+                                int width,
+                                int height,
+                                const std::vector<float>& toneConfMap,
+                                int blockCols,
+                                int blockRows,
+                                std::vector<float>& scratchA,
+                                std::vector<float>& scratchB) const {
+    const int radius = TONE_BLUR_R;
+
+    // NOTE: block-wise attenuation may still show minor seam risk near block edges.
+    // Current mitigation is mild alpha and confidence blending; keep conservative.
+    scratchA.assign(static_cast<size_t>(width * height), 0.0f); // horizontal blur
+    scratchB.assign(static_cast<size_t>(width * height), 0.0f); // full blur
+
+    for (int y = 0; y < height; ++y) {
+        float sum = 0.0f;
+        int count = 0;
+
+        for (int x = -radius; x <= radius; ++x) {
+            const int cx = std::clamp(x, 0, width - 1);
+            sum += static_cast<float>(Y[y * width + cx]);
+            count++;
+        }
+
+        for (int x = 0; x < width; ++x) {
+            scratchA[y * width + x] = sum / static_cast<float>(count);
+
+            const int removeX = std::clamp(x - radius, 0, width - 1);
+            const int addX = std::clamp(x + radius + 1, 0, width - 1);
+            sum += static_cast<float>(Y[y * width + addX])
+                 - static_cast<float>(Y[y * width + removeX]);
+        }
+    }
+
+    for (int x = 0; x < width; ++x) {
+        float sum = 0.0f;
+        int count = 0;
+
+        for (int y = -radius; y <= radius; ++y) {
+            const int cy = std::clamp(y, 0, height - 1);
+            sum += scratchA[cy * width + x];
+            count++;
+        }
+
+        for (int y = 0; y < height; ++y) {
+            scratchB[y * width + x] = sum / static_cast<float>(count);
+
+            const int removeY = std::clamp(y - radius, 0, height - 1);
+            const int addY = std::clamp(y + radius + 1, 0, height - 1);
+            sum += scratchA[addY * width + x] - scratchA[removeY * width + x];
+        }
+    }
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
             const int bCol = std::min(x / BLOCK_SIZE, blockCols - 1);
             const int bRow = std::min(y / BLOCK_SIZE, blockRows - 1);
-            const float conf = minConfMap[bRow * blockCols + bCol];
+            const float confidence = toneConfMap[bRow * blockCols + bCol];
 
-            // Attenuate tone-map boost in low-confidence (motion) blocks
-            const float alpha = TONE_ALPHA * conf;
-
-            const float orig  = static_cast<float>(Y[y * width + x]);
-            const float blur  = blurred[y * width + x];
-            const float boosted = orig + alpha * (orig - blur);
+            const float alpha = TONE_ALPHA * confidence;
+            const float orig = static_cast<float>(Y[y * width + x]);
+            const float detail = orig - scratchB[y * width + x];
+            const float boosted = orig + alpha * detail;
             Y[y * width + x] = static_cast<uint8_t>(
                     std::clamp(static_cast<int>(boosted + 0.5f), 0, 255));
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ProcessMultiFrame — main entry point, JNI signature unchanged
-// ─────────────────────────────────────────────────────────────────────────────
-int CameraEngine::ProcessMultiFrame(
-        int width, int height,
-        const std::vector<const uint8_t*>& frames,
-        int baseIndex,
-        uint8_t* outBytes, int size)
-{
-    // ── Validation ────────────────────────────────────────────────────────────
-    if (frames.empty() || outBytes == nullptr) {
-        LOGE("Empty frames or null outBytes");
+int CameraEngine::ProcessMultiFrame(int width,
+                                    int height,
+                                    const std::vector<const uint8_t*>& frames,
+                                    int baseIndex,
+                                    uint8_t* outBytes,
+                                    int size) {
+    const auto totalStart = std::chrono::steady_clock::now();
+
+    MotionStats emptyStats;
+
+    if (frames.empty() || outBytes == nullptr || width <= 0 || height <= 0) {
+        LOGE("Invalid args: frames=%zu out=%p width=%d height=%d",
+             frames.size(), outBytes, width, height);
+        UpdateDebugStats(emptyStats, 0, static_cast<int>(frames.size()), 0, 0, 0, 0, 0, false);
         return 1;
     }
+
+    if ((width & 1) != 0 || (height & 1) != 0) {
+        LOGE("YUV420 requires even dimensions, got %dx%d", width, height);
+        UpdateDebugStats(emptyStats, 0, static_cast<int>(frames.size()), 0, 0, 0, 0, 0, false);
+        return 1;
+    }
+
     const int expectedSize = width * height + (width * height) / 2;
-    if (size != expectedSize) {
-        LOGE("Size mismatch: got %d, expected %d", size, expectedSize);
+    if (size < expectedSize) {
+        LOGE("Output buffer too small: got %d, required >= %d", size, expectedSize);
+        UpdateDebugStats(emptyStats, 0, static_cast<int>(frames.size()), 0, 0, 0, 0, 0, false);
         return 1;
     }
+
     const int numFrames = static_cast<int>(frames.size());
     if (baseIndex < 0 || baseIndex >= numFrames) {
-        LOGE("Invalid baseIndex %d", baseIndex);
+        LOGE("Invalid baseIndex=%d for numFrames=%d", baseIndex, numFrames);
+        UpdateDebugStats(emptyStats, 0, numFrames, 0, 0, 0, 0, 0, false);
         return 1;
     }
 
-    const int ySize   = width * height;
-    const int vuSize  = ySize / 2;
-    const int uvW     = width  / 2;
-    const int uvH     = height / 2;
+    for (int f = 0; f < numFrames; ++f) {
+        if (frames[f] == nullptr) {
+            LOGE("Null frame pointer at index %d", f);
+            UpdateDebugStats(emptyStats, 0, numFrames, 0, 0, 0, 0, 0, false);
+            return 1;
+        }
+    }
 
-    // Block grid dimensions
-    const int blockCols = (width  + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const int ySize = width * height;
+    const int blockCols = (width + BLOCK_SIZE - 1) / BLOCK_SIZE;
     const int blockRows = (height + BLOCK_SIZE - 1) / BLOCK_SIZE;
     const int numBlocks = blockCols * blockRows;
 
     const uint8_t* baseFrame = frames[baseIndex];
-    const uint8_t* baseY     = baseFrame;
 
-    // ── Stage 1-4: Per-frame block alignment, confidence, sharpness ───────────
-    // Storage: [frameIdx][blockIdx]
-    std::vector<std::vector<BlockMotion>> motionField(numFrames,
-                                                       std::vector<BlockMotion>(numBlocks));
-    // Base sharpness per block (computed once)
-    std::vector<float> baseSharpness(numBlocks, 0.0f);
-    for (int br = 0; br < blockRows; br++) {
-        for (int bc = 0; bc < blockCols; bc++) {
-            baseSharpness[br * blockCols + bc] =
-                ComputeBlockSharpness(baseY, width, height, bc, br);
-        }
+    try {
+        const auto alignStart = std::chrono::steady_clock::now();
+
+        std::vector<BlockMotion> motionField(static_cast<size_t>(numFrames) * numBlocks);
+        const MotionStats stats = BuildMotionField(
+                frames, baseIndex, baseFrame, width, height, blockCols, blockRows, motionField);
+
+        const auto alignEnd = std::chrono::steady_clock::now();
+        const auto mergeYStart = std::chrono::steady_clock::now();
+
+        std::vector<float> accum;
+        std::vector<float> weight;
+        MergeLuma(frames, baseIndex, width, height, blockCols, blockRows,
+                  motionField, accum, weight, outBytes);
+
+        const auto mergeYEnd = std::chrono::steady_clock::now();
+        const auto mergeVuStart = std::chrono::steady_clock::now();
+
+        MergeChroma(frames, baseIndex, width, height, blockCols, blockRows,
+                    motionField, accum, weight, outBytes + ySize);
+
+        const auto mergeVuEnd = std::chrono::steady_clock::now();
+        const auto toneStart = std::chrono::steady_clock::now();
+
+        std::vector<float> toneConfMap;
+        BuildToneConfidenceMap(motionField, numFrames, baseIndex, numBlocks, toneConfMap);
+        LocalToneMap(outBytes, width, height, toneConfMap, blockCols, blockRows, accum, weight);
+
+        const auto toneEnd = std::chrono::steady_clock::now();
+
+        const auto toMs = [](const std::chrono::steady_clock::time_point& a,
+                             const std::chrono::steady_clock::time_point& b) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+        };
+
+        const long long alignMs = toMs(alignStart, alignEnd);
+        const long long mergeYMs = toMs(mergeYStart, mergeYEnd);
+        const long long mergeVuMs = toMs(mergeVuStart, mergeVuEnd);
+        const long long toneMs = toMs(toneStart, toneEnd);
+        const long long totalMs = toMs(totalStart, toneEnd);
+
+        UpdateDebugStats(stats, numBlocks, numFrames,
+                         alignMs, mergeYMs, mergeVuMs, toneMs, totalMs, true);
+
+        DebugStats outStats;
+        GetLastRunDebugStats(&outStats);
+
+        LOGD("Align stats: avgConf=%.3f ghostRatio=%.3f avg|dx|=%.2f avg|dy|=%.2f",
+             outStats.avgConfidence,
+             outStats.ghostedBlockRatio,
+             outStats.avgAbsDx,
+             outStats.avgAbsDy);
+
+        LOGD("Stage timings ms: align=%lld mergeY=%lld mergeVU=%lld tone=%lld total=%lld",
+             outStats.alignMs,
+             outStats.mergeYMs,
+             outStats.mergeVuMs,
+             outStats.toneMs,
+             outStats.totalMs);
+
+    } catch (const std::bad_alloc&) {
+        LOGE("Memory allocation failure in ProcessMultiFrame. Fallback to base frame.");
+        CopyBaseFrame(baseFrame, outBytes, expectedSize);
+        UpdateDebugStats(emptyStats, numBlocks, numFrames, 0, 0, 0, 0, 0, true);
+        return 0;
     }
-
-    int   totalLowConfBlocks = 0;
-    float sumConfidence      = 0.0f;
-    float sumDxMag = 0.0f, sumDyMag = 0.0f;
-    int   motionSamples = 0;
-
-    for (int f = 0; f < numFrames; f++) {
-        if (f == baseIndex) {
-            // Base frame: confidence = 1, no motion
-            for (int b = 0; b < numBlocks; b++) {
-                motionField[f][b].dx = 0;
-                motionField[f][b].dy = 0;
-                motionField[f][b].confidence = 1.0f;
-                motionField[f][b].sharpness  = baseSharpness[b];
-            }
-            continue;
-        }
-
-        const uint8_t* srcY = frames[f];
-        for (int br = 0; br < blockRows; br++) {
-            for (int bc = 0; bc < blockCols; bc++) {
-                const int bidx = br * blockCols + bc;
-                BlockMotion bm = AlignBlock(baseY, srcY, width, height, bc, br);
-
-                // Stage 4: sharpness of aligned position in src frame
-                // (approximate: use same block coords, offset by motion)
-                int alignedBc = std::clamp(bc + bm.dx / BLOCK_SIZE,  0, blockCols - 1);
-                int alignedBr = std::clamp(br + bm.dy / BLOCK_SIZE,  0, blockRows - 1);
-                bm.sharpness  = ComputeBlockSharpness(srcY, width, height,
-                                                       alignedBc, alignedBr);
-
-                motionField[f][bidx] = bm;
-
-                sumConfidence += bm.confidence;
-                sumDxMag += std::abs(bm.dx);
-                sumDyMag += std::abs(bm.dy);
-                motionSamples++;
-
-                const float motionScore = 1.0f - bm.confidence;
-                if (motionScore > GHOST_THRESHOLD) {
-                    totalLowConfBlocks++;
-                }
-            }
-        }
-    }
-
-    if (motionSamples > 0) {
-        LOGD("Align stats: avgConf=%.2f, avgDx=%.1f, avgDy=%.1f, ghostedBlocks=%d/%d",
-             sumConfidence / motionSamples,
-             sumDxMag / motionSamples, sumDyMag / motionSamples,
-             totalLowConfBlocks, numBlocks * (numFrames - 1));
-    }
-
-    // ── Stage 5a: Weighted Y merge ────────────────────────────────────────────
-    // Per-pixel float accumulation — avoids integer overflow and loss of precision.
-    std::vector<float> accumY(ySize, 0.0f);
-    std::vector<float> weightY(ySize, 0.0f);
-
-    // Base frame contributes with fixed weight 1.0 everywhere
-    for (int i = 0; i < ySize; i++) {
-        accumY[i]  = static_cast<float>(baseY[i]);
-        weightY[i] = 1.0f;
-    }
-
-    for (int f = 0; f < numFrames; f++) {
-        if (f == baseIndex) continue;
-
-        const uint8_t* srcY = frames[f];
-
-        for (int br = 0; br < blockRows; br++) {
-            for (int bc = 0; bc < blockCols; bc++) {
-                const BlockMotion& bm = motionField[f][br * blockCols + bc];
-
-                // Stage 3: deghosting — skip block if motion too high
-                const float motionScore = 1.0f - bm.confidence;
-                if (motionScore > GHOST_THRESHOLD) {
-                    // Protect base frame: this block contributes nothing from frame f
-                    continue;
-                }
-
-                // Stage 4 / 5: final weight = confidence × sqrt(sharpness + ε)
-                const float sharpW = std::sqrt(bm.sharpness + SHARP_EPSILON);
-                const float w      = bm.confidence * sharpW;
-                if (w <= 0.0f) continue;
-
-                // Pixel loop for this block
-                const int bx = bc * BLOCK_SIZE;
-                const int by = br * BLOCK_SIZE;
-                const int bw = std::min(BLOCK_SIZE, width  - bx);
-                const int bh = std::min(BLOCK_SIZE, height - by);
-
-                for (int py = 0; py < bh; py++) {
-                    for (int px = 0; px < bw; px++) {
-                        const int dstX = bx + px;
-                        const int dstY = by + py;
-                        const int srcX = std::clamp(dstX + bm.dx, 0, width  - 1);
-                        const int srcY2= std::clamp(dstY + bm.dy, 0, height - 1);
-
-                        const int dstIdx = dstY * width + dstX;
-                        accumY [dstIdx] += w * static_cast<float>(srcY[srcY2 * width + srcX]);
-                        weightY[dstIdx] += w;
-                    }
-                }
-            }
-        }
-    }
-
-    // Normalise Y
-    for (int i = 0; i < ySize; i++) {
-        outBytes[i] = static_cast<uint8_t>(
-            std::clamp(static_cast<int>(accumY[i] / weightY[i] + 0.5f), 0, 255));
-    }
-
-    // ── Stage 5b: Conservative VU merge (block-level weights) ─────────────────
-    // For chroma: use the average block confidence (half-resolution blocks).
-    // Low-confidence blocks fall back to base frame chroma.
-    {
-        std::vector<float> accumVU(vuSize, 0.0f);
-        std::vector<float> weightVU(vuSize, 0.0f);
-
-        // Base contributes weight 1.0
-        for (int i = 0; i < vuSize; i++) {
-            accumVU[i]  = static_cast<float>(baseFrame[ySize + i]);
-            weightVU[i] = 1.0f;
-        }
-
-        for (int f = 0; f < numFrames; f++) {
-            if (f == baseIndex) continue;
-            const uint8_t* src = frames[f];
-
-            for (int br = 0; br < blockRows; br++) {
-                for (int bc = 0; bc < blockCols; bc++) {
-                    const BlockMotion& bm = motionField[f][br * blockCols + bc];
-                    const float motionScore = 1.0f - bm.confidence;
-                    if (motionScore > GHOST_THRESHOLD) continue;
-
-                    // Conservative VU weight: no sharpness factor, lower overall
-                    const float w = bm.confidence * 0.5f;
-                    if (w <= 0.0f) continue;
-
-                    const int uvDx = bm.dx / 2;
-                    const int uvDy = bm.dy / 2;
-
-                    const int uvBx = (bc * BLOCK_SIZE) / 2;
-                    const int uvBy = (br * BLOCK_SIZE) / 2;
-                    const int uvBw = std::min(BLOCK_SIZE / 2, uvW - uvBx);
-                    const int uvBh = std::min(BLOCK_SIZE / 2, uvH - uvBy);
-
-                    for (int vy = 0; vy < uvBh; vy++) {
-                        for (int vx = 0; vx < uvBw; vx++) {
-                            const int dstVx = uvBx + vx;
-                            const int dstVy = uvBy + vy;
-                            const int srcVx = std::clamp(dstVx + uvDx, 0, uvW - 1);
-                            const int srcVy = std::clamp(dstVy + uvDy, 0, uvH - 1);
-
-                            const int dstIdx = (dstVy * uvW + dstVx) * 2;
-                            const int srcIdx = (srcVy * uvW + srcVx) * 2;
-
-                            accumVU[dstIdx]     += w * src[ySize + srcIdx];
-                            accumVU[dstIdx + 1] += w * src[ySize + srcIdx + 1];
-                            weightVU[dstIdx]     += w;
-                            weightVU[dstIdx + 1] += w;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (int i = 0; i < vuSize; i++) {
-            outBytes[ySize + i] = static_cast<uint8_t>(
-                std::clamp(static_cast<int>(accumVU[i] / weightVU[i] + 0.5f), 0, 255));
-        }
-    }
-
-    // ── Stage 6: Mild local tone mapping ─────────────────────────────────────
-    // Build per-block minimum confidence map (across all non-base frames)
-    // to attenuate boost in motion areas.
-    std::vector<float> minConfMap(numBlocks, 1.0f);
-    for (int f = 0; f < numFrames; f++) {
-        if (f == baseIndex) continue;
-        for (int b = 0; b < numBlocks; b++) {
-            minConfMap[b] = std::min(minConfMap[b], motionField[f][b].confidence);
-        }
-    }
-
-    LocalToneMap(outBytes, width, height, minConfMap, blockCols, blockRows);
 
     LOGI("ProcessMultiFrame complete: %d frames, %dx%d", numFrames, width, height);
     return 0;
