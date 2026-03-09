@@ -437,7 +437,29 @@ void CameraEngine::ApplyHdrFusion(const std::vector<const uint8_t*>& frames,
                                   int blockRows,
                                   const std::vector<BlockMotion>& motionField,
                                   uint8_t* mergedY) const {
+    auto logHdrState = [](bool eligible,
+                          const char* reason,
+                          float exposureRatio,
+                          float meanDelta,
+                          float highlightRatio,
+                          bool applied,
+                          int replacedPixels,
+                          int liftedShadowPixels,
+                          bool noOpFallback) {
+        LOGD("HDR gate: eligible=%d reason=%s ratio=%.3f meanDelta=%.3f highlightRatio=%.4f applied=%d replaced=%d lifted=%d fallback=%d",
+             eligible ? 1 : 0,
+             reason,
+             exposureRatio,
+             meanDelta,
+             highlightRatio,
+             applied ? 1 : 0,
+             replacedPixels,
+             liftedShadowPixels,
+             noOpFallback ? 1 : 0);
+    };
+
     if (shortExposureIndex < 0 || shortExposureIndex >= static_cast<int>(frames.size()) || shortExposureIndex == baseIndex) {
+        logHdrState(false, "invalid_short_index", 0.0f, 0.0f, 0.0f, false, 0, 0, true);
         return;
     }
 
@@ -446,6 +468,7 @@ void CameraEngine::ApplyHdrFusion(const std::vector<const uint8_t*>& frames,
     const int ySize = width * height;
     const int numBlocks = blockCols * blockRows;
     if (static_cast<int>(motionField.size()) < static_cast<int>(frames.size()) * numBlocks) {
+        logHdrState(false, "motion_field_mismatch", 0.0f, 0.0f, 0.0f, false, 0, 0, true);
         return;
     }
 
@@ -479,13 +502,22 @@ void CameraEngine::ApplyHdrFusion(const std::vector<const uint8_t*>& frames,
     const float darknessRatio = shortMean / std::max(baseMean, 1.0f);
     const float blackRatio = static_cast<float>(shortBlackPixels) / static_cast<float>(ySize);
 
-    const bool hdrEligible = exposureRatio >= MIN_EXPOSURE_RATIO
-            && meanDelta >= MIN_MEAN_LUMA_DELTA
-            && highlightRatio >= MIN_HIGHLIGHT_PIXELS_RATIO
-            && darknessRatio >= (1.0f - MAX_SHORT_FRAME_DARKNESS_PENALTY)
-            && blackRatio <= MAX_SHORT_BLACK_PIXELS_RATIO;
+    const char* rejectReason = "eligible";
+    if (exposureRatio < MIN_EXPOSURE_RATIO) {
+        rejectReason = "low_exposure_ratio";
+    } else if (meanDelta < MIN_MEAN_LUMA_DELTA) {
+        rejectReason = "low_mean_delta";
+    } else if (highlightRatio < MIN_HIGHLIGHT_PIXELS_RATIO) {
+        rejectReason = "low_highlight_ratio";
+    } else if (darknessRatio < (1.0f - MAX_SHORT_FRAME_DARKNESS_PENALTY)) {
+        rejectReason = "short_too_dark";
+    } else if (blackRatio > MAX_SHORT_BLACK_PIXELS_RATIO) {
+        rejectReason = "short_too_black";
+    }
 
+    const bool hdrEligible = std::strcmp(rejectReason, "eligible") == 0;
     if (!hdrEligible) {
+        logHdrState(false, rejectReason, exposureRatio, meanDelta, highlightRatio, false, 0, 0, true);
         return;
     }
 
@@ -493,6 +525,8 @@ void CameraEngine::ApplyHdrFusion(const std::vector<const uint8_t*>& frames,
     const float shortNormGain = 1.0f + 0.15f * Clamp01(shortToBaseScale - 1.0f);
     const bool allowShadowLift = highlightRatio >= (MIN_HIGHLIGHT_PIXELS_RATIO * 2.5f);
 
+    int replacedPixels = 0;
+    int liftedShadowPixels = 0;
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             const int idx = y * width + x;
@@ -512,19 +546,31 @@ void CameraEngine::ApplyHdrFusion(const std::vector<const uint8_t*>& frames,
                 const float shortLuma = static_cast<float>(shortY[shortYPos * width + shortX]);
                 const float shortNorm = std::clamp(shortLuma * shortNormGain + (shortToBaseScale - 1.0f) * 8.0f, 0.0f, 245.0f);
 
-                // only recover if short sample provides plausible non-clipped detail
                 if (shortNorm + 2.0f < baseLuma) {
                     const float blend = HDR_BLEND_MAX * highlightMask * motionSafe;
                     const float fused = (1.0f - blend) * static_cast<float>(mergedY[idx]) + blend * shortNorm;
                     mergedY[idx] = static_cast<uint8_t>(std::clamp(static_cast<int>(fused + 0.5f), 0, 255));
+                    replacedPixels++;
                 }
             } else if (allowShadowLift && baseLuma < 40.0f && motionSafe > 0.50f) {
                 const float shadowT = Clamp01((40.0f - baseLuma) / 40.0f);
                 const float gain = 1.0f + shadowT * (SHADOW_LIFT_MAX - 1.0f);
                 mergedY[idx] = static_cast<uint8_t>(std::clamp(static_cast<int>(mergedY[idx] * gain + 0.5f), 0, 255));
+                liftedShadowPixels++;
             }
         }
     }
+
+    const bool applied = replacedPixels > 0 || liftedShadowPixels > 0;
+    logHdrState(true,
+                applied ? "applied" : "eligible_but_noop",
+                exposureRatio,
+                meanDelta,
+                highlightRatio,
+                applied,
+                replacedPixels,
+                liftedShadowPixels,
+                !applied);
 }
 
 void CameraEngine::BuildToneConfidenceMap(const std::vector<BlockMotion>& motionField,
