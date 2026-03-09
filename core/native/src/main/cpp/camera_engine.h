@@ -2,6 +2,7 @@
 #define CAMERA_ENGINE_H
 
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 namespace cameraxmvp {
@@ -38,6 +39,22 @@ public:
                           const std::vector<const uint8_t*>& frames,
                           int baseIndex,
                           uint8_t* outBytes, int size);
+
+    struct DebugStats {
+        float avgConfidence = 0.0f;
+        float ghostedBlockRatio = 0.0f;
+        float avgAbsDx = 0.0f;
+        float avgAbsDy = 0.0f;
+        long long alignMs = 0;
+        long long mergeYMs = 0;
+        long long mergeVuMs = 0;
+        long long toneMs = 0;
+        long long totalMs = 0;
+        bool valid = false;
+    };
+
+    // Safe readback for host-side benchmarks/tuning.
+    bool GetLastRunDebugStats(DebugStats* outStats) const;
 
 private:
     struct BlockMotion {
@@ -89,11 +106,11 @@ private:
                      std::vector<float>& weight,
                      uint8_t* outVU) const;
 
-    void BuildMinConfidenceMap(const std::vector<BlockMotion>& motionField,
-                               int numFrames,
-                               int baseIndex,
-                               int numBlocks,
-                               std::vector<float>& minConfMap) const;
+    void BuildToneConfidenceMap(const std::vector<BlockMotion>& motionField,
+                                int numFrames,
+                                int baseIndex,
+                                int numBlocks,
+                                std::vector<float>& toneConfMap) const;
 
     // Stage 6: in-place mild local tone map on Y plane.
     void LocalToneMap(uint8_t* Y, int width, int height,
@@ -101,6 +118,19 @@ private:
                       int blockCols, int blockRows,
                       std::vector<float>& scratchA,
                       std::vector<float>& scratchB) const;
+
+    void UpdateDebugStats(const MotionStats& motionStats,
+                          int numBlocks,
+                          int numFrames,
+                          long long alignMs,
+                          long long mergeYMs,
+                          long long mergeVuMs,
+                          long long toneMs,
+                          long long totalMs,
+                          bool valid);
+
+    mutable std::mutex statsMutex_;
+    DebugStats lastStats_;
 };
 
 } // namespace cameraxmvp

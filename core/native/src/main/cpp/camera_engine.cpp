@@ -15,17 +15,24 @@
 #include "camera_engine.h"
 
 #include <algorithm>
-#include <android/log.h>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <new>
 
+#if defined(__ANDROID__)
+#include <android/log.h>
 #define LOG_TAG "CameraEngineNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGI(...) do { std::fprintf(stdout, "[I] " __VA_ARGS__); std::fprintf(stdout, "\n"); } while (0)
+#define LOGD(...) do { std::fprintf(stdout, "[D] " __VA_ARGS__); std::fprintf(stdout, "\n"); } while (0)
+#define LOGE(...) do { std::fprintf(stderr, "[E] " __VA_ARGS__); std::fprintf(stderr, "\n"); } while (0)
+#endif
 
 namespace cameraxmvp {
 namespace {
@@ -86,8 +93,52 @@ float ComputeSharpnessAtOffset(const uint8_t* yPlane,
 
 } // namespace
 
-CameraEngine::CameraEngine() { LOGI("CameraEngine constructed (motion-aware merge v3)"); }
+CameraEngine::CameraEngine() { LOGI("CameraEngine constructed (motion-aware merge v4)"); }
 CameraEngine::~CameraEngine() { LOGI("CameraEngine destroyed"); }
+
+bool CameraEngine::GetLastRunDebugStats(DebugStats* outStats) const {
+    if (outStats == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(statsMutex_);
+    *outStats = lastStats_;
+    return lastStats_.valid;
+}
+
+void CameraEngine::UpdateDebugStats(const MotionStats& motionStats,
+                                    int numBlocks,
+                                    int numFrames,
+                                    long long alignMs,
+                                    long long mergeYMs,
+                                    long long mergeVuMs,
+                                    long long toneMs,
+                                    long long totalMs,
+                                    bool valid) {
+    std::lock_guard<std::mutex> lock(statsMutex_);
+
+    lastStats_.alignMs = alignMs;
+    lastStats_.mergeYMs = mergeYMs;
+    lastStats_.mergeVuMs = mergeVuMs;
+    lastStats_.toneMs = toneMs;
+    lastStats_.totalMs = totalMs;
+    lastStats_.valid = valid;
+
+    if (!valid || motionStats.samples <= 0) {
+        lastStats_.avgConfidence = 0.0f;
+        lastStats_.ghostedBlockRatio = 0.0f;
+        lastStats_.avgAbsDx = 0.0f;
+        lastStats_.avgAbsDy = 0.0f;
+        return;
+    }
+
+    const int totalMotionBlocks = numBlocks * std::max(0, numFrames - 1);
+    lastStats_.avgConfidence = motionStats.confidenceSum / static_cast<float>(motionStats.samples);
+    lastStats_.ghostedBlockRatio = (totalMotionBlocks > 0)
+            ? (static_cast<float>(motionStats.ghostedBlocks) / static_cast<float>(totalMotionBlocks))
+            : 0.0f;
+    lastStats_.avgAbsDx = motionStats.dxAbsSum / static_cast<float>(motionStats.samples);
+    lastStats_.avgAbsDy = motionStats.dyAbsSum / static_cast<float>(motionStats.samples);
+}
 
 CameraEngine::BlockMotion CameraEngine::AlignBlock(const uint8_t* baseY,
                                                     const uint8_t* srcY,
@@ -130,6 +181,7 @@ CameraEngine::BlockMotion CameraEngine::AlignBlock(const uint8_t* baseY,
                     sad += std::abs(static_cast<int>(baseY[baseYPos * width + baseX])
                                   - static_cast<int>(srcY[srcYPos * width + srcX]));
 
+                    // Early prune current candidate once it cannot beat best SAD.
                     if (sad >= bestSad) {
                         abortCandidate = true;
                         break;
@@ -333,6 +385,8 @@ void CameraEngine::MergeChroma(const std::vector<const uint8_t*>& frames,
                     continue;
                 }
 
+                // Conservative chroma merge: confidence-only weighting and reduced gain
+                // to limit hue smearing across block boundaries in motion-heavy areas.
                 const float w = bm.confidence * 0.5f;
                 if (w <= 0.0f) {
                     continue;
@@ -372,33 +426,53 @@ void CameraEngine::MergeChroma(const std::vector<const uint8_t*>& frames,
     }
 }
 
-void CameraEngine::BuildMinConfidenceMap(const std::vector<BlockMotion>& motionField,
-                                         int numFrames,
-                                         int baseIndex,
-                                         int numBlocks,
-                                         std::vector<float>& minConfMap) const {
-    minConfMap.assign(static_cast<size_t>(numBlocks), 1.0f);
-    for (int f = 0; f < numFrames; ++f) {
-        if (f == baseIndex) {
-            continue;
-        }
-        for (int b = 0; b < numBlocks; ++b) {
+void CameraEngine::BuildToneConfidenceMap(const std::vector<BlockMotion>& motionField,
+                                          int numFrames,
+                                          int baseIndex,
+                                          int numBlocks,
+                                          std::vector<float>& toneConfMap) const {
+    toneConfMap.assign(static_cast<size_t>(numBlocks), 1.0f);
+    if (numFrames <= 1) {
+        return;
+    }
+
+    // Blend min and mean confidence per block to avoid one bad frame from fully
+    // killing local contrast boost. This reduces aggressive over-attenuation.
+    constexpr float kMinBlend = 0.35f;
+    constexpr float kMeanBlend = 0.65f;
+
+    for (int b = 0; b < numBlocks; ++b) {
+        float minConf = 1.0f;
+        float sumConf = 0.0f;
+        int count = 0;
+        for (int f = 0; f < numFrames; ++f) {
+            if (f == baseIndex) {
+                continue;
+            }
             const float conf = motionField[MotionIndex(f, b, numBlocks)].confidence;
-            minConfMap[b] = std::min(minConfMap[b], conf);
+            minConf = std::min(minConf, conf);
+            sumConf += conf;
+            count++;
         }
+
+        const float meanConf = (count > 0) ? (sumConf / static_cast<float>(count)) : 1.0f;
+        const float blended = kMinBlend * minConf + kMeanBlend * meanConf;
+        toneConfMap[b] = Clamp01(blended);
     }
 }
 
 void CameraEngine::LocalToneMap(uint8_t* Y,
                                 int width,
                                 int height,
-                                const std::vector<float>& minConfMap,
+                                const std::vector<float>& toneConfMap,
                                 int blockCols,
                                 int blockRows,
                                 std::vector<float>& scratchA,
                                 std::vector<float>& scratchB) const {
     const int radius = TONE_BLUR_R;
 
+    // NOTE: block-wise attenuation may still show minor seam risk near block edges.
+    // Current mitigation is mild alpha and confidence blending; keep conservative.
     scratchA.assign(static_cast<size_t>(width * height), 0.0f); // horizontal blur
     scratchB.assign(static_cast<size_t>(width * height), 0.0f); // full blur
 
@@ -445,7 +519,7 @@ void CameraEngine::LocalToneMap(uint8_t* Y,
         for (int x = 0; x < width; ++x) {
             const int bCol = std::min(x / BLOCK_SIZE, blockCols - 1);
             const int bRow = std::min(y / BLOCK_SIZE, blockRows - 1);
-            const float confidence = minConfMap[bRow * blockCols + bCol];
+            const float confidence = toneConfMap[bRow * blockCols + bCol];
 
             const float alpha = TONE_ALPHA * confidence;
             const float orig = static_cast<float>(Y[y * width + x]);
@@ -465,32 +539,39 @@ int CameraEngine::ProcessMultiFrame(int width,
                                     int size) {
     const auto totalStart = std::chrono::steady_clock::now();
 
+    MotionStats emptyStats;
+
     if (frames.empty() || outBytes == nullptr || width <= 0 || height <= 0) {
         LOGE("Invalid args: frames=%zu out=%p width=%d height=%d",
              frames.size(), outBytes, width, height);
+        UpdateDebugStats(emptyStats, 0, static_cast<int>(frames.size()), 0, 0, 0, 0, 0, false);
         return 1;
     }
 
     if ((width & 1) != 0 || (height & 1) != 0) {
         LOGE("YUV420 requires even dimensions, got %dx%d", width, height);
+        UpdateDebugStats(emptyStats, 0, static_cast<int>(frames.size()), 0, 0, 0, 0, 0, false);
         return 1;
     }
 
     const int expectedSize = width * height + (width * height) / 2;
     if (size < expectedSize) {
         LOGE("Output buffer too small: got %d, required >= %d", size, expectedSize);
+        UpdateDebugStats(emptyStats, 0, static_cast<int>(frames.size()), 0, 0, 0, 0, 0, false);
         return 1;
     }
 
     const int numFrames = static_cast<int>(frames.size());
     if (baseIndex < 0 || baseIndex >= numFrames) {
         LOGE("Invalid baseIndex=%d for numFrames=%d", baseIndex, numFrames);
+        UpdateDebugStats(emptyStats, 0, numFrames, 0, 0, 0, 0, 0, false);
         return 1;
     }
 
     for (int f = 0; f < numFrames; ++f) {
         if (frames[f] == nullptr) {
             LOGE("Null frame pointer at index %d", f);
+            UpdateDebugStats(emptyStats, 0, numFrames, 0, 0, 0, 0, 0, false);
             return 1;
         }
     }
@@ -510,7 +591,6 @@ int CameraEngine::ProcessMultiFrame(int width,
                 frames, baseIndex, baseFrame, width, height, blockCols, blockRows, motionField);
 
         const auto alignEnd = std::chrono::steady_clock::now();
-
         const auto mergeYStart = std::chrono::steady_clock::now();
 
         std::vector<float> accum;
@@ -519,46 +599,54 @@ int CameraEngine::ProcessMultiFrame(int width,
                   motionField, accum, weight, outBytes);
 
         const auto mergeYEnd = std::chrono::steady_clock::now();
-
         const auto mergeVuStart = std::chrono::steady_clock::now();
 
         MergeChroma(frames, baseIndex, width, height, blockCols, blockRows,
                     motionField, accum, weight, outBytes + ySize);
 
         const auto mergeVuEnd = std::chrono::steady_clock::now();
-
         const auto toneStart = std::chrono::steady_clock::now();
 
-        std::vector<float> minConfMap;
-        BuildMinConfidenceMap(motionField, numFrames, baseIndex, numBlocks, minConfMap);
-        LocalToneMap(outBytes, width, height, minConfMap, blockCols, blockRows, accum, weight);
+        std::vector<float> toneConfMap;
+        BuildToneConfidenceMap(motionField, numFrames, baseIndex, numBlocks, toneConfMap);
+        LocalToneMap(outBytes, width, height, toneConfMap, blockCols, blockRows, accum, weight);
 
         const auto toneEnd = std::chrono::steady_clock::now();
-
-        if (stats.samples > 0) {
-            LOGD("Align stats: avgConf=%.3f, ghosted=%d/%d, avg|dx|=%.2f, avg|dy|=%.2f",
-                 stats.confidenceSum / static_cast<float>(stats.samples),
-                 stats.ghostedBlocks,
-                 numBlocks * std::max(0, numFrames - 1),
-                 stats.dxAbsSum / static_cast<float>(stats.samples),
-                 stats.dyAbsSum / static_cast<float>(stats.samples));
-        }
 
         const auto toMs = [](const std::chrono::steady_clock::time_point& a,
                              const std::chrono::steady_clock::time_point& b) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
         };
 
+        const long long alignMs = toMs(alignStart, alignEnd);
+        const long long mergeYMs = toMs(mergeYStart, mergeYEnd);
+        const long long mergeVuMs = toMs(mergeVuStart, mergeVuEnd);
+        const long long toneMs = toMs(toneStart, toneEnd);
+        const long long totalMs = toMs(totalStart, toneEnd);
+
+        UpdateDebugStats(stats, numBlocks, numFrames,
+                         alignMs, mergeYMs, mergeVuMs, toneMs, totalMs, true);
+
+        DebugStats outStats;
+        GetLastRunDebugStats(&outStats);
+
+        LOGD("Align stats: avgConf=%.3f ghostRatio=%.3f avg|dx|=%.2f avg|dy|=%.2f",
+             outStats.avgConfidence,
+             outStats.ghostedBlockRatio,
+             outStats.avgAbsDx,
+             outStats.avgAbsDy);
+
         LOGD("Stage timings ms: align=%lld mergeY=%lld mergeVU=%lld tone=%lld total=%lld",
-             static_cast<long long>(toMs(alignStart, alignEnd)),
-             static_cast<long long>(toMs(mergeYStart, mergeYEnd)),
-             static_cast<long long>(toMs(mergeVuStart, mergeVuEnd)),
-             static_cast<long long>(toMs(toneStart, toneEnd)),
-             static_cast<long long>(toMs(totalStart, toneEnd)));
+             outStats.alignMs,
+             outStats.mergeYMs,
+             outStats.mergeVuMs,
+             outStats.toneMs,
+             outStats.totalMs);
 
     } catch (const std::bad_alloc&) {
         LOGE("Memory allocation failure in ProcessMultiFrame. Fallback to base frame.");
         CopyBaseFrame(baseFrame, outBytes, expectedSize);
+        UpdateDebugStats(emptyStats, numBlocks, numFrames, 0, 0, 0, 0, 0, true);
         return 0;
     }
 
