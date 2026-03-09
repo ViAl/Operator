@@ -18,8 +18,14 @@ static constexpr int   TONE_BLUR_R     = 8;
 
 static constexpr int   HIGHLIGHT_START = 220;
 static constexpr int   HIGHLIGHT_END   = 250;
-static constexpr float HDR_BLEND_MAX   = 0.85f;
-static constexpr float SHADOW_LIFT_MAX = 1.08f;
+static constexpr float HDR_BLEND_MAX   = 0.70f;
+static constexpr float SHADOW_LIFT_MAX = 1.05f;
+
+static constexpr float MIN_EXPOSURE_RATIO = 1.35f;
+static constexpr float MIN_MEAN_LUMA_DELTA = 8.0f;
+static constexpr float MIN_HIGHLIGHT_PIXELS_RATIO = 0.01f;
+static constexpr float MAX_SHORT_FRAME_DARKNESS_PENALTY = 0.72f;
+static constexpr float MAX_SHORT_BLACK_PIXELS_RATIO = 0.45f;
 
 class CameraEngine {
 public:
@@ -32,7 +38,6 @@ public:
                           int shortExposureIndex,
                           const std::vector<int64_t>& exposureTimeNs,
                           const std::vector<int>& isoValues,
-                          const std::vector<int>& exposureClass,
                           uint8_t* outBytes, int size);
 
     struct DebugStats {
@@ -106,6 +111,7 @@ private:
                         const std::vector<int64_t>& exposureTimeNs,
                         const std::vector<int>& isoValues,
                         int blockCols,
+                        int blockRows,
                         const std::vector<BlockMotion>& motionField,
                         uint8_t* mergedY) const;
 

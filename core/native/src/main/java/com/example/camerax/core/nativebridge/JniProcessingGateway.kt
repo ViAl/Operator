@@ -35,9 +35,6 @@ class JniProcessingGateway @Inject constructor(
             val nv21Arrays = framesList.map { it.nv21Data }.toTypedArray()
             val exposureTimeNs = LongArray(framesList.size) { idx -> framesList[idx].metadata.exposureTimeNs }
             val isoValues = IntArray(framesList.size) { idx -> framesList[idx].metadata.iso }
-            val exposureClass = IntArray(framesList.size) { idx ->
-                if (framesList[idx].metadata.exposureClass == ExposureClass.SHORT) 1 else 0
-            }
 
             val shortExposureIndex = framesList.indexOfFirst { it.metadata.exposureClass == ExposureClass.SHORT }
             val outBytes = ByteArray(baseFrame.nv21Data.size)
@@ -50,7 +47,6 @@ class JniProcessingGateway @Inject constructor(
                 shortExposureIndex,
                 exposureTimeNs,
                 isoValues,
-                exposureClass,
                 outBytes
             )
 
@@ -84,7 +80,6 @@ class JniProcessingGateway @Inject constructor(
         shortExposureIndex: Int,
         exposureTimeNs: LongArray,
         isoValues: IntArray,
-        exposureClass: IntArray,
         outNv21: ByteArray
     ): Int
 }

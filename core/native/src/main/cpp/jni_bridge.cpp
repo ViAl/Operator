@@ -15,15 +15,13 @@ Java_com_example_camerax_core_nativebridge_JniProcessingGateway_nativeProcessMul
         jint short_exposure_index,
         jlongArray exposure_time_ns,
         jintArray iso_values,
-        jintArray exposure_class,
         jbyteArray out_nv21) {
 
     jsize num_frames = env->GetArrayLength(in_nv21_arrays);
     if (num_frames == 0) return 1;
 
     if (env->GetArrayLength(exposure_time_ns) != num_frames
-        || env->GetArrayLength(iso_values) != num_frames
-        || env->GetArrayLength(exposure_class) != num_frames) {
+        || env->GetArrayLength(iso_values) != num_frames) {
         __android_log_print(ANDROID_LOG_ERROR, "JNIBridge", "Exposure metadata size mismatch");
         return 1;
     }
@@ -53,16 +51,13 @@ Java_com_example_camerax_core_nativebridge_JniProcessingGateway_nativeProcessMul
 
     jlong* exp_ptr = env->GetLongArrayElements(exposure_time_ns, nullptr);
     jint* iso_ptr = env->GetIntArrayElements(iso_values, nullptr);
-    jint* class_ptr = env->GetIntArrayElements(exposure_class, nullptr);
     jbyte *out_bytes = env->GetByteArrayElements(out_nv21, nullptr);
 
     std::vector<int64_t> exp_vec(static_cast<size_t>(num_frames));
     std::vector<int> iso_vec(static_cast<size_t>(num_frames));
-    std::vector<int> class_vec(static_cast<size_t>(num_frames));
     for (int i = 0; i < num_frames; ++i) {
         exp_vec[static_cast<size_t>(i)] = static_cast<int64_t>(exp_ptr[i]);
         iso_vec[static_cast<size_t>(i)] = static_cast<int>(iso_ptr[i]);
-        class_vec[static_cast<size_t>(i)] = static_cast<int>(class_ptr[i]);
     }
 
     cameraxmvp::CameraEngine engine;
@@ -75,7 +70,6 @@ Java_com_example_camerax_core_nativebridge_JniProcessingGateway_nativeProcessMul
         static_cast<int>(short_exposure_index),
         exp_vec,
         iso_vec,
-        class_vec,
         reinterpret_cast<uint8_t *>(out_bytes),
         static_cast<int>(expected_size)
     );
@@ -87,7 +81,6 @@ Java_com_example_camerax_core_nativebridge_JniProcessingGateway_nativeProcessMul
 
     env->ReleaseLongArrayElements(exposure_time_ns, exp_ptr, JNI_ABORT);
     env->ReleaseIntArrayElements(iso_values, iso_ptr, JNI_ABORT);
-    env->ReleaseIntArrayElements(exposure_class, class_ptr, JNI_ABORT);
     env->ReleaseByteArrayElements(out_nv21, out_bytes, 0);
 
     return result;
