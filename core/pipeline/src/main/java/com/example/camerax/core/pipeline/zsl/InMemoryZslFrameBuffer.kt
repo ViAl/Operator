@@ -5,6 +5,7 @@ import com.example.camerax.core.common.dispatchers.AppDispatchers
 import com.example.camerax.core.common.logger.Logger
 import com.example.camerax.core.model.capture.BurstFrameSet
 import com.example.camerax.core.model.capture.BurstRequest
+import com.example.camerax.core.model.capture.ExposureClass
 import com.example.camerax.core.model.pipeline.PipelineError
 import kotlinx.coroutines.withContext
 import java.util.LinkedList
@@ -18,9 +19,6 @@ class InMemoryZslFrameBuffer @Inject constructor(
 ) : ZslFrameBuffer {
 
     private val capacity = 8
-    
-    // Buffer stores Frame instances (snapshots), NOT ImageProxy, 
-    // to avoid leaking CameraX buffers and blocking the pipeline.
     private val buffer = LinkedList<BurstFrameSet.Frame>()
     private val bufferLock = Object()
 
@@ -29,11 +27,10 @@ class InMemoryZslFrameBuffer @Inject constructor(
             mapper.mapToFrameInfo(image)
         } catch (e: Exception) {
             logger.e("ZSL", "Failed to map base frame", e)
-            image.close() // Important: close even on format mapping failure
+            image.close()
             return
         }
-        
-        // Ensure proxy is closed immediately after mapping to prevent analyzer blocks
+
         image.close()
 
         synchronized(bufferLock) {
@@ -51,19 +48,40 @@ class InMemoryZslFrameBuffer @Inject constructor(
                 throw PipelineError.NoFramesAvailable("Buffer size: ${buffer.size}")
             }
 
-            // Find closest index by target timestamp
             val centerIndex = buffer.indexOfMinBy { abs(it.metadata.timestampNs - request.targetTimestampNs) }
                 ?: throw PipelineError.NoFramesAvailable("Buffer is unexpectedly empty")
-                
+
             val startIndex = maxOf(0, centerIndex - request.framesNum / 2)
             val endIndex = minOf(buffer.size - 1, startIndex + request.framesNum - 1)
-            
-            // For BurstFrameSet, we can just copy the references to the Domain Objects
+
             val framesRange = buffer.subList(startIndex, endIndex + 1).toList()
-            
-            logger.d("ZSL", "Extracted burst of ${framesRange.size} frames centered around timestamp ${request.targetTimestampNs}")
-            
-            return@withContext BurstFrameSet(framesRange)
+            val shortIdx = framesRange.indices.minByOrNull { estimateLumaMean(framesRange[it]) }
+
+            val hdrAnnotated = framesRange.mapIndexed { idx, frame ->
+                val exposureClass = if (shortIdx != null && idx == shortIdx) ExposureClass.SHORT else ExposureClass.NORMAL
+                val exposureTimeNs = if (frame.metadata.exposureTimeNs > 0) {
+                    frame.metadata.exposureTimeNs
+                } else {
+                    if (exposureClass == ExposureClass.SHORT) 4_000_000L else 10_000_000L
+                }
+                val iso = if (frame.metadata.iso > 0) frame.metadata.iso else 100
+
+                frame.copy(
+                    metadata = frame.metadata.copy(
+                        exposureTimeNs = exposureTimeNs,
+                        iso = iso,
+                        exposureCompensationIndex = if (exposureClass == ExposureClass.SHORT) -1 else 0,
+                        exposureClass = exposureClass
+                    )
+                )
+            }
+
+            logger.d(
+                "ZSL",
+                "Extracted burst=${hdrAnnotated.size}, centerTs=${request.targetTimestampNs}, shortIdx=${shortIdx ?: -1}"
+            )
+
+            return@withContext BurstFrameSet(hdrAnnotated)
         }
     }
 
@@ -73,18 +91,25 @@ class InMemoryZslFrameBuffer @Inject constructor(
         }
     }
 
+    private fun estimateLumaMean(frame: BurstFrameSet.Frame): Float {
+        val ySize = frame.width * frame.height
+        if (ySize <= 0 || frame.nv21Data.isEmpty()) return 255f
+        var sum = 0L
+        for (i in 0 until minOf(ySize, frame.nv21Data.size)) {
+            sum += frame.nv21Data[i].toInt() and 0xFF
+        }
+        return sum.toFloat() / ySize.toFloat()
+    }
+
     private inline fun <T, R : Comparable<R>> Iterable<T>.indexOfMinBy(selector: (T) -> R): Int? {
         val iterator = iterator()
         if (!iterator.hasNext()) return null
-        var minElem = iterator.next()
-        var minValue = selector(minElem)
+        var minValue = selector(iterator.next())
         var minIndex = 0
         var i = 1
         while (iterator.hasNext()) {
-            val e = iterator.next()
-            val v = selector(e)
+            val v = selector(iterator.next())
             if (minValue > v) {
-                minElem = e
                 minValue = v
                 minIndex = i
             }

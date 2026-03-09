@@ -426,6 +426,71 @@ void CameraEngine::MergeChroma(const std::vector<const uint8_t*>& frames,
     }
 }
 
+void CameraEngine::ApplyHdrFusion(const std::vector<const uint8_t*>& frames,
+                                  int width,
+                                  int height,
+                                  int baseIndex,
+                                  int shortExposureIndex,
+                                  const std::vector<int64_t>& exposureTimeNs,
+                                  const std::vector<int>& isoValues,
+                                  int blockCols,
+                                  const std::vector<BlockMotion>& motionField,
+                                  uint8_t* mergedY) const {
+    if (shortExposureIndex < 0 || shortExposureIndex >= static_cast<int>(frames.size())) {
+        return;
+    }
+
+    const uint8_t* baseY = frames[baseIndex];
+    const uint8_t* shortY = frames[shortExposureIndex];
+
+    const float baseEv = static_cast<float>(std::max<int64_t>(1, exposureTimeNs[baseIndex]))
+            * static_cast<float>(std::max(isoValues[baseIndex], 1));
+    const float shortEv = static_cast<float>(std::max<int64_t>(1, exposureTimeNs[shortExposureIndex]))
+            * static_cast<float>(std::max(isoValues[shortExposureIndex], 1));
+    const float shortToBaseScale = std::clamp(baseEv / std::max(shortEv, 1.0f), 1.0f, 8.0f);
+
+    const int numBlocks = static_cast<int>(frames.size()) * ((width + BLOCK_SIZE - 1) / BLOCK_SIZE) * ((height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    if (static_cast<int>(motionField.size()) < numBlocks) {
+        return;
+    }
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int idx = y * width + x;
+            const float baseLuma = static_cast<float>(baseY[idx]);
+
+            const float highlightMask = Clamp01((baseLuma - static_cast<float>(HIGHLIGHT_START))
+                                                / static_cast<float>(HIGHLIGHT_END - HIGHLIGHT_START));
+            if (highlightMask <= 0.0f) {
+                if (baseLuma < 48.0f) {
+                    const float shadowT = Clamp01((48.0f - baseLuma) / 48.0f);
+                    const float gain = 1.0f + shadowT * (SHADOW_LIFT_MAX - 1.0f);
+                    mergedY[idx] = static_cast<uint8_t>(std::clamp(static_cast<int>(mergedY[idx] * gain + 0.5f), 0, 255));
+                }
+                continue;
+            }
+
+            const int blockCol = std::min(x / BLOCK_SIZE, blockCols - 1);
+            const int blockRow = std::min(y / BLOCK_SIZE, (height + BLOCK_SIZE - 1) / BLOCK_SIZE - 1);
+            const int blockIdx = blockRow * blockCols + blockCol;
+            const BlockMotion& shortMotion = motionField[MotionIndex(shortExposureIndex, blockIdx, blockCols * ((height + BLOCK_SIZE - 1) / BLOCK_SIZE))];
+            const float motionSafe = Clamp01((shortMotion.confidence - 0.2f) / 0.8f);
+            if (motionSafe <= 0.1f) {
+                continue;
+            }
+
+            const int shortX = std::clamp(x + shortMotion.dx, 0, width - 1);
+            const int shortYPos = std::clamp(y + shortMotion.dy, 0, height - 1);
+            const float shortLuma = static_cast<float>(shortY[shortYPos * width + shortX]);
+            const float shortNorm = std::clamp(shortLuma * shortToBaseScale, 0.0f, 255.0f);
+
+            const float blend = HDR_BLEND_MAX * highlightMask * motionSafe;
+            const float fused = (1.0f - blend) * static_cast<float>(mergedY[idx]) + blend * shortNorm;
+            mergedY[idx] = static_cast<uint8_t>(std::clamp(static_cast<int>(fused + 0.5f), 0, 255));
+        }
+    }
+}
+
 void CameraEngine::BuildToneConfidenceMap(const std::vector<BlockMotion>& motionField,
                                           int numFrames,
                                           int baseIndex,
@@ -535,6 +600,10 @@ int CameraEngine::ProcessMultiFrame(int width,
                                     int height,
                                     const std::vector<const uint8_t*>& frames,
                                     int baseIndex,
+                                    int shortExposureIndex,
+                                    const std::vector<int64_t>& exposureTimeNs,
+                                    const std::vector<int>& isoValues,
+                                    const std::vector<int>& exposureClass,
                                     uint8_t* outBytes,
                                     int size) {
     const auto totalStart = std::chrono::steady_clock::now();
@@ -562,6 +631,13 @@ int CameraEngine::ProcessMultiFrame(int width,
     }
 
     const int numFrames = static_cast<int>(frames.size());
+    if (exposureTimeNs.size() != frames.size() || isoValues.size() != frames.size() || exposureClass.size() != frames.size()) {
+        LOGE("Exposure metadata mismatch: frames=%d exp=%zu iso=%zu class=%zu", numFrames,
+             exposureTimeNs.size(), isoValues.size(), exposureClass.size());
+        UpdateDebugStats(emptyStats, 0, numFrames, 0, 0, 0, 0, 0, false);
+        return 1;
+    }
+
     if (baseIndex < 0 || baseIndex >= numFrames) {
         LOGE("Invalid baseIndex=%d for numFrames=%d", baseIndex, numFrames);
         UpdateDebugStats(emptyStats, 0, numFrames, 0, 0, 0, 0, 0, false);
@@ -603,6 +679,18 @@ int CameraEngine::ProcessMultiFrame(int width,
 
         MergeChroma(frames, baseIndex, width, height, blockCols, blockRows,
                     motionField, accum, weight, outBytes + ySize);
+
+        ApplyHdrFusion(
+                frames,
+                width,
+                height,
+                baseIndex,
+                shortExposureIndex,
+                exposureTimeNs,
+                isoValues,
+                blockCols,
+                motionField,
+                outBytes);
 
         const auto mergeVuEnd = std::chrono::steady_clock::now();
         const auto toneStart = std::chrono::steady_clock::now();

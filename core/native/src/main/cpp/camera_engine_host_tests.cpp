@@ -123,7 +123,7 @@ bool RunIdenticalFramesTest() {
 
     std::vector<uint8_t> out(base.bytes.size(), 0);
     CameraEngine engine;
-    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, out.data(), static_cast<int>(out.size()));
+    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, -1, std::vector<int64_t>(framePtrs.size(), 10000000), std::vector<int>(framePtrs.size(), 100), std::vector<int>(framePtrs.size(), 0), out.data(), static_cast<int>(out.size()));
     if (status != 0) {
         std::fprintf(stderr, "IdenticalFramesTest: ProcessMultiFrame failed\n");
         return false;
@@ -157,7 +157,7 @@ bool RunTranslationAlignmentTest() {
 
     std::vector<uint8_t> out(base.bytes.size(), 0);
     CameraEngine engine;
-    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, out.data(), static_cast<int>(out.size()));
+    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, -1, std::vector<int64_t>(framePtrs.size(), 10000000), std::vector<int>(framePtrs.size(), 100), std::vector<int>(framePtrs.size(), 0), out.data(), static_cast<int>(out.size()));
     if (status != 0) {
         std::fprintf(stderr, "TranslationAlignmentTest: ProcessMultiFrame failed\n");
         return false;
@@ -199,7 +199,7 @@ bool RunMotionDeghostingTest() {
 
     std::vector<uint8_t> out(static_cast<size_t>(ySize + ySize / 2), 0);
     CameraEngine engine;
-    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, out.data(), static_cast<int>(out.size()));
+    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, -1, std::vector<int64_t>(framePtrs.size(), 10000000), std::vector<int>(framePtrs.size(), 100), std::vector<int>(framePtrs.size(), 0), out.data(), static_cast<int>(out.size()));
     if (status != 0) {
         std::fprintf(stderr, "MotionDeghostingTest: ProcessMultiFrame failed\n");
         return false;
@@ -258,7 +258,7 @@ bool RunToneMappingSanityTest() {
 
     std::vector<uint8_t> out(base.bytes.size(), 0);
     CameraEngine engine;
-    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, out.data(), static_cast<int>(out.size()));
+    const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, -1, std::vector<int64_t>(framePtrs.size(), 10000000), std::vector<int>(framePtrs.size(), 100), std::vector<int>(framePtrs.size(), 0), out.data(), static_cast<int>(out.size()));
     if (status != 0) {
         std::fprintf(stderr, "ToneMappingSanityTest: ProcessMultiFrame failed\n");
         return false;
@@ -302,7 +302,7 @@ bool RunBenchmark() {
     double totalMs = 0.0;
     for (int i = 0; i < kIters; ++i) {
         const auto t0 = std::chrono::steady_clock::now();
-        const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, out.data(), static_cast<int>(out.size()));
+        const int status = engine.ProcessMultiFrame(width, height, framePtrs, 2, -1, std::vector<int64_t>(framePtrs.size(), 10000000), std::vector<int>(framePtrs.size(), 100), std::vector<int>(framePtrs.size(), 0), out.data(), static_cast<int>(out.size()));
         const auto t1 = std::chrono::steady_clock::now();
         if (status != 0) {
             std::fprintf(stderr, "Benchmark: ProcessMultiFrame failed\n");
